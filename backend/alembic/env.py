@@ -1,10 +1,20 @@
 from alembic import context
 from sqlalchemy import engine_from_config, pool
 
+from app.core.config import get_settings
 from app.models.database import Base
 
 config = context.config
 target_metadata = Base.metadata
+
+
+def migration_database_url() -> str:
+    """Use Alembic's synchronous drivers for the app's async DB URL."""
+    url = get_settings().database_url
+    return url.replace("postgresql+asyncpg://", "postgresql+psycopg://", 1).replace("sqlite+aiosqlite://", "sqlite://", 1)
+
+
+config.set_main_option("sqlalchemy.url", migration_database_url())
 
 
 def run_migrations_offline():

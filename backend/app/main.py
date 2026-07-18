@@ -13,10 +13,13 @@ from app.models.database import Base, User
 
 @asynccontextmanager
 async def lifespan(_: FastAPI):
-    async with engine.begin() as connection:
-        await connection.run_sync(Base.metadata.create_all)
+    settings = get_settings()
+    # Production Postgres schemas are managed exclusively by Alembic. SQLite is
+    # retained for isolated tests and zero-setup local mock development.
+    if settings.database_url.startswith("sqlite"):
+        async with engine.begin() as connection:
+            await connection.run_sync(Base.metadata.create_all)
     async with SessionLocal() as db:
-        settings = get_settings()
         # Supabase owns production credentials. Its configured admin email gains
         # the application admin role when that authenticated user first calls us.
         if not settings.supabase_url:

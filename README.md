@@ -17,7 +17,7 @@ pip install -r requirements.txt
 uvicorn app.main:app --reload
 ```
 
-For local PostgreSQL, run `docker compose -f docker-compose.yml up -d` from `backend/` and set `DATABASE_URL=postgresql+asyncpg://learning_coach:learning_coach@127.0.0.1:5432/learning_coach` in `backend/.env`. For deployment, use the Supabase Session Pooler connection string in `DATABASE_URL` and set `SUPABASE_URL` and `SUPABASE_PUBLISHABLE_KEY`. Supabase Auth owns email/password credentials; the backend verifies each Supabase access token and creates a matching application profile on first use.
+For local PostgreSQL, run `docker compose -f docker-compose.yml up -d` from `backend/` and set `DATABASE_URL=postgresql+asyncpg://learning_coach:learning_coach@127.0.0.1:5432/learning_coach` in `backend/.env`. Run `alembic upgrade head` to create or update the schema. For deployment, use the Supabase Session Pooler connection string in `DATABASE_URL`, then run that same migration command in the deployment environment. Supabase Auth owns email/password credentials; the backend verifies each Supabase access token and creates a matching application profile on first use.
 
 The API docs are available at `http://127.0.0.1:8000/docs`. The default `mock` provider makes the app usable locally without an LLM. Configure a real provider in `backend/.env`:
 

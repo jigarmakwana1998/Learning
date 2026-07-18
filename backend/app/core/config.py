@@ -2,6 +2,10 @@ import os
 from functools import lru_cache
 
 from pydantic import BaseModel
+from dotenv import load_dotenv
+
+
+load_dotenv()
 
 
 class Settings(BaseModel):
