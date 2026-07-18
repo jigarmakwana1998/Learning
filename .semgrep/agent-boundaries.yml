@@ -4,15 +4,15 @@ rules:
     severity: ERROR
     languages: [python]
     paths:
-      include: [backend/app/agents/**]
+      include: [/backend/app/agents/**]
     patterns:
       - pattern-either:
           - pattern: import sqlalchemy
           - pattern: import asyncpg
           - pattern: import psycopg
-          - pattern: from sqlalchemy ...
-          - pattern: from asyncpg ...
-          - pattern: from psycopg ...
+          - pattern: from sqlalchemy import $X
+          - pattern: from asyncpg import $X
+          - pattern: from psycopg import $X
   - id: no-interpolated-sql-or-cypher
     message: Do not interpolate strings into SQL or Cypher. Use parameterized queries through the data boundary.
     severity: ERROR
