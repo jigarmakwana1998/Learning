@@ -1,0 +1,12 @@
+.git
+.github
+.agents
+backend/.venv
+backend/.pytest_cache
+backend/.benchmarks
+backend/*.db
+backend/benchmark.json
+backend/evaluation-report.json
+backend/.env
+mobile/node_modules
+mobile/.env
