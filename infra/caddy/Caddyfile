@@ -9,5 +9,11 @@
         Referrer-Policy "strict-origin-when-cross-origin"
         -Server
     }
-    reverse_proxy api:8000
+    handle_path /api/* {
+        reverse_proxy api:8000
+    }
+
+    handle {
+        reverse_proxy web:3000
+    }
 }

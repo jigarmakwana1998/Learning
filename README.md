@@ -1,21 +1,39 @@
 # Learning Coach
 
-An Expo (React Native + TypeScript) app for web, iOS, and Android, plus a FastAPI service that turns a learner's goal into a researched curriculum, study schedule, quizzes, and assignments.
+An Expo (React Native + TypeScript) app for web, iOS, and Android, a Next.js web client, and a FastAPI service that turns a learner's goal into a researched curriculum, study schedule, quizzes, and assignments.
 
 ## Structure
 
 - `mobile/` — Universal Expo Router client (web, iOS, Android)
 - `backend/` — FastAPI API and provider-agnostic agent harness
 
+## Run the self-hosted stack
+
+For local development, copy `.env.example` to `.env` and
+`backend/.env.example` to `backend/.env`, then replace every placeholder before
+running:
+
+```bash
+docker compose up --build
+```
+
+This starts the self-hosted data services, FastAPI, and the web client behind
+Caddy at `http://localhost:8080`; the API is available beneath `/api`. Before a
+non-development deployment, apply
+`backend/infra/postgres/roles.sql` as the database owner after migration; agent
+workers must use the insert-only `agent_writer` role, never the migration owner.
+
 ## Start the backend
 
 ```bash
 cd backend
-python3 -m venv .venv
-source .venv/bin/activate
-pip install -r requirements.txt
-uvicorn app.main:app --reload
+uv sync --group dev
+uv run uvicorn app.main:app --reload
 ```
+
+The backend is managed with `uv`. Its first hexagonal vertical slice is
+`GET /health`: the FastAPI adapter resolves an application service through
+Dishka, and that service calls a replaceable outbound health port.
 
 For local PostgreSQL, run `docker compose -f docker-compose.yml up -d` from `backend/` and set `DATABASE_URL=postgresql+asyncpg://learning_coach:learning_coach@127.0.0.1:5432/learning_coach` in `backend/.env`. Run `alembic upgrade head` to create or update the schema. For deployment, use the Supabase Session Pooler connection string in `DATABASE_URL`, then run that same migration command in the deployment environment. Supabase Auth owns email/password credentials; the backend verifies each Supabase access token and creates a matching application profile on first use.
 
