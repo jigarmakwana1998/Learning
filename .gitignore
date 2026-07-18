@@ -1,4 +1,6 @@
 backend/.venv/
+backend/.env
+mobile/.env
 backend/*.db
 backend/evaluation-report.json
 backend/benchmark.json
