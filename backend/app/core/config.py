@@ -11,6 +11,8 @@ class Settings(BaseModel):
     encryption_key: str = os.getenv("APP_ENCRYPTION_KEY", "q0_mL9PZ2Ik1Wl9qVzYmIDQDfL8dbbSbix-AJZAcBLk=")
     admin_email: str = os.getenv("ADMIN_EMAIL", "admin@example.com")
     admin_password: str = os.getenv("ADMIN_PASSWORD", "change-me-now")
+    supabase_url: str | None = os.getenv("SUPABASE_URL")
+    supabase_publishable_key: str | None = os.getenv("SUPABASE_PUBLISHABLE_KEY")
 
 
 @lru_cache

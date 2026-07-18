@@ -17,7 +17,7 @@ pip install -r requirements.txt
 uvicorn app.main:app --reload
 ```
 
-For PostgreSQL, run `docker compose -f docker-compose.yml up -d` from `backend/` and set `DATABASE_URL=postgresql+asyncpg://learning_coach:learning_coach@127.0.0.1:5432/learning_coach` in `backend/.env`. Apply versioned schema migrations with `alembic upgrade head`; the development server also creates missing tables on startup for the SQLite default.
+For local PostgreSQL, run `docker compose -f docker-compose.yml up -d` from `backend/` and set `DATABASE_URL=postgresql+asyncpg://learning_coach:learning_coach@127.0.0.1:5432/learning_coach` in `backend/.env`. For deployment, use the Supabase Session Pooler connection string in `DATABASE_URL` and set `SUPABASE_URL` and `SUPABASE_PUBLISHABLE_KEY`. Supabase Auth owns email/password credentials; the backend verifies each Supabase access token and creates a matching application profile on first use.
 
 The API docs are available at `http://127.0.0.1:8000/docs`. The default `mock` provider makes the app usable locally without an LLM. Configure a real provider in `backend/.env`:
 
@@ -25,7 +25,7 @@ The API docs are available at `http://127.0.0.1:8000/docs`. The default `mock` p
 AGENT_PROVIDER=codex       # codex, gemini-cli, antigravity-cli, or mock
 ```
 
-Copy `backend/.env.example` to `backend/.env` and replace the JWT secret, encryption key, and admin password before deployment. Each real provider is executed through its installed CLI; ensure it is authenticated on the server. CLI invocation flags can change, so the example supports `CODEX_COMMAND`, `GEMINI_CLI_COMMAND`, and `ANTIGRAVITY_CLI_COMMAND` overrides that emit one JSON object to stdout. The harness keeps commands behind one adapter, so moving to an API/SDK-based provider later does not affect the three-agent workflow.
+Copy `backend/.env.example` to `backend/.env`, set the Supabase values, and replace the encryption key and admin password before deployment. Each real provider is executed through its installed CLI; ensure it is authenticated on the server. CLI invocation flags can change, so the example supports `CODEX_COMMAND`, `GEMINI_CLI_COMMAND`, and `ANTIGRAVITY_CLI_COMMAND` overrides that emit one JSON object to stdout. The harness keeps commands behind one adapter, so moving to an API/SDK-based provider later does not affect the three-agent workflow.
 
 ## Start the mobile app
 
@@ -39,7 +39,7 @@ npx expo start
 
 Press `w` for the web app, `i` for iOS simulator, or `a` for Android emulator. Expo Go can be used for a physical device.
 
-For an iOS/Android device, set `EXPO_PUBLIC_API_URL` in `mobile/.env` to your computer's LAN address, for example `http://192.168.1.10:8000`.
+Copy `mobile/.env.example` to `mobile/.env`. Set the Supabase Project URL and publishable key; for an iOS/Android device, set `EXPO_PUBLIC_API_URL` to your computer's LAN address, for example `http://192.168.1.10:8000`.
 
 ## Next product milestones
 

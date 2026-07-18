@@ -1,6 +1,7 @@
 backend/.venv/
 backend/*.db
 backend/evaluation-report.json
+backend/benchmark.json
 __pycache__/
 .pytest_cache/
 node_modules/
