@@ -17,10 +17,13 @@ async def lifespan(_: FastAPI):
         await connection.run_sync(Base.metadata.create_all)
     async with SessionLocal() as db:
         settings = get_settings()
-        admin = await db.scalar(select(User).where(User.email == settings.admin_email.lower()))
-        if admin is None:
-            db.add(User(email=settings.admin_email.lower(), password_hash=hash_password(settings.admin_password), role="admin"))
-            await db.commit()
+        # Supabase owns production credentials. Its configured admin email gains
+        # the application admin role when that authenticated user first calls us.
+        if not settings.supabase_url:
+            admin = await db.scalar(select(User).where(User.email == settings.admin_email.lower()))
+            if admin is None:
+                db.add(User(email=settings.admin_email.lower(), password_hash=hash_password(settings.admin_password), role="admin"))
+                await db.commit()
     yield
     await engine.dispose()
 
