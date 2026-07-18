@@ -1,0 +1,13 @@
+{
+  "expo": {
+    "name": "Learning Coach",
+    "slug": "learning-coach",
+    "scheme": "learningcoach",
+    "version": "0.1.0",
+    "orientation": "portrait",
+    "platforms": ["ios", "android", "web"],
+    "userInterfaceStyle": "automatic",
+    "plugins": ["expo-router"],
+    "experiments": { "typedRoutes": true }
+  }
+}

@@ -1,0 +1,24 @@
+name: Backend checks
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  test-and-benchmark:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: backend
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: python -m pip install --upgrade pip && pip install -r requirements.txt
+      - run: pytest -q --benchmark-disable
+      - run: pytest -q --benchmark-only --benchmark-json=benchmark.json
+      - uses: actions/upload-artifact@v4
+        with:
+          name: backend-benchmarks
+          path: backend/benchmark.json

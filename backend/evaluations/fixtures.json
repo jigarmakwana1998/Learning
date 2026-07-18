@@ -1,0 +1,5 @@
+[
+  {"name": "technical_beginner", "topic": "Python programming", "level": "beginner", "hours_per_week": 4, "weeks": 6},
+  {"name": "academic_intermediate", "topic": "linear algebra", "level": "intermediate", "hours_per_week": 6, "weeks": 8},
+  {"name": "creative_advanced", "topic": "documentary filmmaking", "level": "advanced", "hours_per_week": 8, "weeks": 10}
+]
