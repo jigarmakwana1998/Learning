@@ -2,12 +2,16 @@ from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from dishka import make_async_container
+from dishka.integrations.fastapi import setup_dishka
 from sqlalchemy import select
 
+from app.adapters.inbound.health import router as health_router
 from app.controllers import analytics_router, auth_router, learning_router, sessions_router
 from app.core.config import get_settings
 from app.core.database import SessionLocal, engine
 from app.core.security import hash_password
+from app.di.providers import ApplicationProvider
 from app.models.database import Base, User
 
 
@@ -31,14 +35,11 @@ async def lifespan(_: FastAPI):
     await engine.dispose()
 
 
-app = FastAPI(title="Learning Coach API", version="0.3.0", lifespan=lifespan)
+settings = get_settings()
+app = FastAPI(title=settings.app_name, version=settings.app_version, lifespan=lifespan)
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_credentials=False, allow_methods=["*"], allow_headers=["*"])
-
-
-@app.get("/health")
-def health() -> dict[str, str]: return {"status": "ok"}
-
-
+setup_dishka(make_async_container(ApplicationProvider()), app)
+app.include_router(health_router)
 app.include_router(auth_router)
 app.include_router(learning_router)
 app.include_router(sessions_router)

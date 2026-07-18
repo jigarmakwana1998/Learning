@@ -9,6 +9,9 @@ load_dotenv()
 
 
 class Settings(BaseModel):
+    app_name: str = os.getenv("APP_NAME", "Learning Coach API")
+    app_version: str = os.getenv("APP_VERSION", "0.4.0")
+    environment: str = os.getenv("ENVIRONMENT", "development")
     agent_provider: str = os.getenv("AGENT_PROVIDER", "mock")
     database_url: str = os.getenv("DATABASE_URL", "sqlite+aiosqlite:///./learning_coach.db")
     jwt_secret: str = os.getenv("JWT_SECRET", "change-this-development-jwt-secret")
