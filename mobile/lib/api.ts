@@ -5,6 +5,7 @@ export type LearningRun = { id: string; provider: "mock" | "codex" | "gemini-cli
 export type AnalyticsOverview = { total_users: number; total_requests: number; completed_runs: number; failed_runs: number; active_sessions: number; transcript_entries: number; average_session_duration_ms: number };
 export type Session = { id: string; agent_name: string; provider: string; status: string; learning_request_id: string; topic: string; duration_ms: number | null; started_at: string };
 export type TranscriptSession = { id: string; run_id: string; agent_name: string; provider: string; status: string; transcript: Array<{ role: string; content: string; created_at: string }> };
+export type AgentProvider = "mock" | "codex" | "gemini-cli" | "antigravity-cli";
 
 const API_URL = process.env.EXPO_PUBLIC_API_URL ?? "http://127.0.0.1:8000";
 
@@ -29,8 +30,10 @@ export const login = (email: string, password: string) => authenticate("login", 
 export const register = (email: string, password: string) => authenticate("register", email, password);
 export const logout = () => supabase.auth.signOut();
 export const getMe = () => request<User>("/auth/me");
-export const createLearningRun = (topic: string, hoursPerWeek: number) => request<LearningRun>("/learning-runs", { method: "POST", body: JSON.stringify({ topic, hours_per_week: hoursPerWeek, weeks: 4, level: "beginner", provider: "mock" }) });
+export const createLearningRun = (topic: string, hoursPerWeek: number) => request<LearningRun>("/learning-runs", { method: "POST", body: JSON.stringify({ topic, hours_per_week: hoursPerWeek, weeks: 4, level: "beginner" }) });
 export const getOverview = () => request<AnalyticsOverview>("/analytics/overview");
 export const getUsers = () => request<{ items: User[] }>("/analytics/users");
 export const getSessions = () => request<Session[]>("/analytics/sessions");
 export const getTranscript = (id: string) => request<TranscriptSession>(`/agent-sessions/${id}`);
+export const getAgentProvider = () => request<{ provider: AgentProvider }>("/analytics/settings/agent-provider");
+export const setAgentProvider = (provider: AgentProvider) => request<{ provider: AgentProvider }>("/analytics/settings/agent-provider", { method: "PUT", body: JSON.stringify({ provider }) });

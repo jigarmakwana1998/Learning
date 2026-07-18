@@ -25,7 +25,9 @@ The API docs are available at `http://127.0.0.1:8000/docs`. The default `mock` p
 AGENT_PROVIDER=codex       # codex, gemini-cli, antigravity-cli, or mock
 ```
 
-Copy `backend/.env.example` to `backend/.env`, set the Supabase values, and replace the encryption key and admin password before deployment. Each real provider is executed through its installed CLI; ensure it is authenticated on the server. CLI invocation flags can change, so the example supports `CODEX_COMMAND`, `GEMINI_CLI_COMMAND`, and `ANTIGRAVITY_CLI_COMMAND` overrides that emit one JSON object to stdout. The harness keeps commands behind one adapter, so moving to an API/SDK-based provider later does not affect the three-agent workflow.
+Copy `backend/.env.example` to `backend/.env`, set the Supabase values, and replace the encryption key before deployment. Each real provider is executed through its installed CLI; ensure it is authenticated on the server. CLI invocation flags can change, so the example supports `CODEX_COMMAND`, `GEMINI_CLI_COMMAND`, and `ANTIGRAVITY_CLI_COMMAND` overrides that emit one JSON object to stdout. The harness keeps commands behind one adapter, so moving to an API/SDK-based provider later does not affect the three-agent workflow.
+
+Set the first administrator's Supabase Auth `app_metadata.role` to `admin` in the Supabase dashboard or with a server-side administrative tool. The mobile admin screen then controls the default agent provider; the setting is stored in PostgreSQL and applies to new runs immediately without restarting the API.
 
 ## Start the mobile app
 

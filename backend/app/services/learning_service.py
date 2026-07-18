@@ -1,17 +1,19 @@
 from datetime import datetime, timezone
 
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.agents import ExaminerAgent, PlannerAgent, ResearcherAgent
 from app.core.config import get_settings
 from app.harness import AgentHarness
-from app.models.database import AgentRun, LearningRequest, User
+from app.models.database import AgentRun, LearningRequest, SystemSetting, User
 from app.schemas.learning import Assessment, CurriculumModule, LearningGoal, LearningRun, LearningRunRequest, ResearchBrief, Source
 
 
 class LearningService:
     async def create_run(self, db: AsyncSession, user: User, request: LearningRunRequest) -> LearningRun:
-        provider = request.provider or get_settings().agent_provider
+        configured = await db.scalar(select(SystemSetting).where(SystemSetting.key == "agent_provider"))
+        provider = configured.value if configured else get_settings().agent_provider
         if provider not in {"mock", "codex", "gemini-cli", "antigravity-cli"}: raise ValueError("Unsupported agent provider")
         goal = LearningGoal.model_validate(request)
         learning_request = LearningRequest(user_id=user.id, topic=goal.topic, level=goal.level, hours_per_week=goal.hours_per_week, weeks=goal.weeks)

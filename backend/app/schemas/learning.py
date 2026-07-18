@@ -13,7 +13,11 @@ class LearningGoal(BaseModel):
 
 
 class LearningRunRequest(LearningGoal):
-    provider: AgentProvider | None = None
+    pass
+
+
+class AgentProviderSetting(BaseModel):
+    provider: AgentProvider
 
 
 class Source(BaseModel):

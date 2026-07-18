@@ -29,10 +29,14 @@ async def get_current_user(credentials: HTTPAuthorizationCredentials | None = De
         user_id, email = identity.get("id"), identity.get("email")
         if not user_id or not email:
             raise HTTPException(status_code=401, detail="Supabase user is missing an email address")
+        role = "admin" if identity.get("app_metadata", {}).get("role") == "admin" else "learner"
         user = await db.scalar(select(User).where(User.id == user_id))
         if user is None:
-            user = User(id=user_id, email=email.lower(), password_hash="supabase-managed", role="admin" if email.lower() == settings.admin_email.lower() else "learner")
+            user = User(id=user_id, email=email.lower(), password_hash="supabase-managed", role=role)
             db.add(user); await db.commit(); await db.refresh(user)
+        elif user.email != email.lower() or user.role != role:
+            user.email, user.role = email.lower(), role
+            await db.commit(); await db.refresh(user)
         return user
     try: payload = jwt.decode(credentials.credentials, get_settings().jwt_secret, algorithms=["HS256"])
     except jwt.PyJWTError as error: raise HTTPException(status_code=401, detail="Invalid access token") from error

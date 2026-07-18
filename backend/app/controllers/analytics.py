@@ -5,10 +5,28 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import get_db
 from app.core.dependencies import get_admin
-from app.models.database import AgentRun, AgentSessionRecord, LearningRequest, TranscriptEntryRecord, User
+from app.models.database import AgentRun, AgentSessionRecord, LearningRequest, SystemSetting, TranscriptEntryRecord, User
 from app.schemas.analytics import AnalyticsOverview, RequestListItem, SessionListItem
+from app.schemas.learning import AgentProviderSetting
 
 router = APIRouter(prefix="/analytics", tags=["analytics"])
+
+
+@router.get("/settings/agent-provider", response_model=AgentProviderSetting)
+async def get_agent_provider(db: AsyncSession = Depends(get_db), _: User = Depends(get_admin)) -> AgentProviderSetting:
+    setting = await db.scalar(select(SystemSetting).where(SystemSetting.key == "agent_provider"))
+    return AgentProviderSetting(provider=setting.value if setting else "mock")
+
+
+@router.put("/settings/agent-provider", response_model=AgentProviderSetting)
+async def set_agent_provider(payload: AgentProviderSetting, db: AsyncSession = Depends(get_db), _: User = Depends(get_admin)) -> AgentProviderSetting:
+    setting = await db.scalar(select(SystemSetting).where(SystemSetting.key == "agent_provider"))
+    if setting is None:
+        db.add(SystemSetting(key="agent_provider", value=payload.provider))
+    else:
+        setting.value = payload.provider
+    await db.commit()
+    return payload
 
 
 @router.get("/overview", response_model=AnalyticsOverview)
