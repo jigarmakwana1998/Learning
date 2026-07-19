@@ -10,7 +10,6 @@ permissions:
 
 jobs:
   backend:
-    continue-on-error: true
     name: Backend lint and tests
     runs-on: ubuntu-24.04
     env:
@@ -28,7 +27,9 @@ jobs:
       # Existing style debt is addressed separately; enforce correctness and
       # security-oriented lint rules for new CI failures in the meantime.
       - run: uv run ruff check . --ignore E501,E701,E702,B008,I001,UP017
-      - run: uv run pytest -n auto --testmon -q --benchmark-disable --cov=app --cov-report=xml:coverage.xml
+      # The SQLite-backed tests share one database file; running them in
+      # parallel races application startup and table creation.
+      - run: uv run pytest --testmon -q --benchmark-disable --cov=app --cov-report=xml:coverage.xml
       - uses: actions/upload-artifact@65c4c4a1ddee5b72f698fdd19549f0f0fb45cf08 # v4.6.0
         if: always()
         with: { name: backend-coverage, path: backend/coverage.xml, if-no-files-found: warn }
