@@ -15,4 +15,4 @@ def get_runtime(provider: AgentProvider):
         "antigravity-cli": (["agy", "--output-format", "json"], "ANTIGRAVITY_CLI_COMMAND"),
     }
     command, env_var = commands[provider]
-    return CliRuntime(provider, command, env_var)
+    return CliRuntime(provider, command, env_var, prompt_flag="-p" if provider == "gemini-cli" else None)
