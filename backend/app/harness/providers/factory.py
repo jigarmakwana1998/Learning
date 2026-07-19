@@ -11,8 +11,10 @@ def get_runtime(provider: AgentProvider):
     if provider == "mock": return MockRuntime()
     commands = {
         "codex": (["codex", "exec", "--json", "-"], "CODEX_COMMAND"),
-        "gemini-cli": (["gemini", "--output-format", "json"], "GEMINI_CLI_COMMAND"),
+        # Plan mode permits read-only research while preventing a course-generation
+        # prompt from editing the workspace in unattended execution.
+        "gemini-cli": (["gemini", "--output-format", "json", "--approval-mode", "plan"], "GEMINI_CLI_COMMAND"),
         "antigravity-cli": (["agy", "--output-format", "json"], "ANTIGRAVITY_CLI_COMMAND"),
     }
     command, env_var = commands[provider]
-    return CliRuntime(provider, command, env_var)
+    return CliRuntime(provider, command, env_var, prompt_flag="-p" if provider == "gemini-cli" else None)
