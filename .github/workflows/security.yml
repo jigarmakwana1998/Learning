@@ -31,7 +31,8 @@ jobs:
       - name: TruffleHog full history nightly / PR range otherwise
         run: |
           python -m pip install "trufflehog==2.2.1"
-          trufflehog filesystem --directory . --json --fail || exit 1
+          findings="$(trufflehog --json --regex --entropy=True "file://$PWD")"
+          test -z "$findings"
   container:
     runs-on: ubuntu-24.04
     steps:
