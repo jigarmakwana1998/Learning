@@ -36,6 +36,7 @@ async def test_gemini_runtime_maps_local_env_and_unwraps_response(monkeypatch):
     assert captured["kwargs"]["stdin"] is None
     assert captured["kwargs"]["env"]["GEMINI_API_KEY"] == "test-key-not-a-real-secret"
     assert captured["kwargs"]["env"]["GOOGLE_CLOUD_PROJECT"] == "projects/784566960532"
+    assert captured["kwargs"]["env"]["GEMINI_CLI_TRUST_WORKSPACE"] == "true"
 
 
 def test_gemini_response_can_be_json_fenced():

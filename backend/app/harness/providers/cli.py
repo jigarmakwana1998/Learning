@@ -2,6 +2,7 @@ import asyncio
 import json
 import os
 import shlex
+import shutil
 
 
 class CliRuntime:
@@ -13,6 +14,12 @@ class CliRuntime:
 
     async def execute(self, prompt: str) -> dict:
         command = [*self.command]
+        environment = self._environment()
+        # On Windows, npm exposes Gemini through a .cmd shim. Resolve it before
+        # spawning so asyncio does not try to execute PowerShell's .ps1 wrapper.
+        executable = shutil.which(command[0], path=environment.get("PATH") or environment.get("Path"))
+        if executable:
+            command[0] = executable
         stdin = asyncio.subprocess.PIPE
         prompt_bytes = prompt.encode()
         if self.prompt_flag:
@@ -27,12 +34,19 @@ class CliRuntime:
                 stdin=stdin,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
-                env=self._environment(),
+                env=environment,
             )
         except FileNotFoundError as error:
             raise RuntimeError(f"{self.name} executable was not found. Install it or set its command override in .env.") from error
 
-        stdout, stderr = await process.communicate(prompt_bytes)
+        try:
+            stdout, stderr = await asyncio.wait_for(
+                process.communicate(prompt_bytes), timeout=int(os.getenv("AGENT_CLI_TIMEOUT_SECONDS", "120")),
+            )
+        except TimeoutError as error:
+            process.kill()
+            await process.wait()
+            raise RuntimeError(f"{self.name} timed out. Try again after checking provider availability.") from error
         if process.returncode != 0:
             # CLI stderr can contain provider diagnostics. Do not forward it because it
             # may include account or project details that do not belong in an API error.
@@ -50,6 +64,9 @@ class CliRuntime:
             self._set_if_missing(environment, "GEMINI_API_KEY", "gemini_api_key")
             self._set_if_missing(environment, "GOOGLE_API_KEY", "google_api_key")
             self._set_if_missing(environment, "GOOGLE_CLOUD_PROJECT", "project_id")
+            # Gemini CLI refuses unattended prompts in an untrusted workspace.
+            # This flag is scoped to the child process, never persisted in .env.
+            environment.setdefault("GEMINI_CLI_TRUST_WORKSPACE", "true")
         return environment
 
     @staticmethod
