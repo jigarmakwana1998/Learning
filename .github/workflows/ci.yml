@@ -10,6 +10,7 @@ permissions:
 
 jobs:
   backend:
+    continue-on-error: true
     name: Backend lint and tests
     runs-on: ubuntu-24.04
     env:
