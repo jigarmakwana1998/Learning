@@ -1,0 +1,71 @@
+"use client";
+
+import { useMemo, useState } from "react";
+import { useMutation } from "@tanstack/react-query";
+import { ArrowLeft, ArrowRight, BookOpen, Check, CheckCircle2, Circle, ClipboardCheck, FileText, LoaderCircle, Send, Trophy } from "lucide-react";
+import { courseModules, quizQuestions, saveLessonProgress, submitQuiz, submitWork, workPrompt, type LearningRun, type Lesson, type QuizResult, type SubmissionResult } from "@/lib/api";
+import { Button } from "@/components/ui/button";
+import { Card } from "@/components/ui/card";
+
+type Tab = "learn" | "quiz" | "work";
+
+function safeUrl(value: string) { try { const url = new URL(value); return url.protocol === "https:" || url.protocol === "http:" ? url.toString() : undefined; } catch { return undefined; } }
+
+export function CoursePlayer({ run, token }: { run: LearningRun; token: string }) {
+  const modules = useMemo(() => courseModules(run), [run]);
+  const lessons = useMemo(() => modules.flatMap((module) => module.lessons), [modules]);
+  const [activeLessonId, setActiveLessonId] = useState(lessons[0]?.id ?? "");
+  const [tab, setTab] = useState<Tab>("learn");
+  const [completed, setCompleted] = useState(() => new Set(lessons.filter((lesson) => lesson.completed).map((lesson) => lesson.id)));
+  const activeIndex = Math.max(0, lessons.findIndex((lesson) => lesson.id === activeLessonId));
+  const lesson = lessons[activeIndex];
+  const total = lessons.length;
+  const progress = total ? Math.round((completed.size / total) * 100) : 0;
+  const progressMutation = useMutation({ mutationFn: ({ lessonId, done }: { lessonId: string; done: boolean }) => saveLessonProgress(run.id, lessonId, done, token) });
+
+  function chooseLesson(lessonId: string) { setActiveLessonId(lessonId); setTab("learn"); }
+  function toggleComplete() {
+    if (!lesson) return;
+    const done = !completed.has(lesson.id);
+    setCompleted((current) => { const next = new Set(current); done ? next.add(lesson.id) : next.delete(lesson.id); return next; });
+    progressMutation.mutate({ lessonId: lesson.id, done }, { onError: () => setCompleted((current) => { const next = new Set(current); done ? next.delete(lesson.id) : next.add(lesson.id); return next; }) });
+  }
+  function move(direction: -1 | 1) { const target = lessons[activeIndex + direction]; if (target) chooseLesson(target.id); }
+
+  if (!lesson) return <Card><p className="text-muted-foreground">This course is still being prepared. Generate it again in a moment.</p></Card>;
+  return <section aria-labelledby="course-player-title" className="grid gap-5">
+    <Card className="overflow-hidden p-0"><div className="border-b p-5 sm:p-6"><div className="flex flex-wrap items-start justify-between gap-4"><div><p className="text-sm font-semibold uppercase tracking-wider text-primary">Your learning path</p><h2 id="course-player-title" className="mt-1 text-2xl font-bold">{run.course?.title ?? run.research.topic}</h2><p className="mt-1 text-sm text-muted-foreground">{completed.size} of {total} lessons complete</p></div><div className="min-w-36 text-right"><p className="text-2xl font-bold text-primary">{progress}%</p><p className="text-xs text-muted-foreground">course progress</p></div></div><div className="mt-4 h-2 overflow-hidden rounded-full bg-muted" aria-label={`${progress}% course progress`} role="progressbar" aria-valuemin={0} aria-valuemax={100} aria-valuenow={progress}><div className="h-full rounded-full bg-primary transition-all" style={{ width: `${progress}%` }} /></div></div>
+      <div className="grid min-h-[38rem] lg:grid-cols-[17rem_minmax(0,1fr)]">
+        <aside className="border-b bg-muted/30 p-3 lg:border-b-0 lg:border-r" aria-label="Course lessons"><p className="px-2 pb-2 text-xs font-bold uppercase tracking-wider text-muted-foreground">Course content</p><ol className="grid gap-1">{modules.map((module) => <li key={module.id}><p className="px-2 pb-1 pt-3 text-xs font-semibold text-muted-foreground">Module {module.week}: {module.title}</p>{module.lessons.map((item, index) => <button key={item.id} type="button" onClick={() => chooseLesson(item.id)} aria-current={item.id === lesson.id ? "step" : undefined} className={`flex w-full items-center gap-2 rounded-lg px-2 py-2 text-left text-sm transition-colors ${item.id === lesson.id ? "bg-card font-semibold shadow-sm" : "hover:bg-card/70"}`}><span className="shrink-0 text-primary">{completed.has(item.id) ? <CheckCircle2 size={17} aria-label="Completed" /> : <Circle size={17} aria-hidden="true" />}</span><span className="min-w-0 truncate"><span className="mr-1 text-muted-foreground">{index + 1}.</span>{item.title}</span></button>)}</li>)}</ol></aside>
+        <div className="p-5 sm:p-7"><div className="flex flex-wrap gap-2 border-b pb-4" role="tablist" aria-label="Learning activity"><TabButton active={tab === "learn"} onClick={() => setTab("learn")} icon={<BookOpen size={16} />} label="Lesson" /><TabButton active={tab === "quiz"} onClick={() => setTab("quiz")} icon={<ClipboardCheck size={16} />} label="Quiz" /><TabButton active={tab === "work"} onClick={() => setTab("work")} icon={<FileText size={16} />} label="Assignment" /></div>
+          {tab === "learn" && <LessonView lesson={lesson} module={modules.find((item) => item.lessons.some((candidate) => candidate.id === lesson.id))} completed={completed.has(lesson.id)} saving={progressMutation.isPending} saveError={progressMutation.error} onToggleComplete={toggleComplete} onQuiz={() => setTab("quiz")} />}
+          {tab === "quiz" && <QuizView run={run} token={token} onWork={() => setTab("work")} />}
+          {tab === "work" && <WorkView run={run} token={token} />}
+          <div className="mt-8 flex items-center justify-between gap-3 border-t pt-5"><Button variant="secondary" disabled={activeIndex === 0} onClick={() => move(-1)} className="gap-1"><ArrowLeft size={16} /> Previous</Button><p className="text-center text-sm text-muted-foreground">Lesson {activeIndex + 1} of {total}</p><Button variant="secondary" disabled={activeIndex === total - 1} onClick={() => move(1)} className="gap-1">Next <ArrowRight size={16} /></Button></div>
+        </div>
+      </div>
+    </Card>
+  </section>;
+}
+
+function TabButton({ active, icon, label, onClick }: { active: boolean; icon: React.ReactNode; label: string; onClick: () => void }) { return <button type="button" role="tab" aria-selected={active} onClick={onClick} className={`inline-flex items-center gap-2 rounded-lg px-3 py-2 text-sm font-semibold ${active ? "bg-accent text-primary" : "text-muted-foreground hover:bg-muted"}`}>{icon}{label}</button>; }
+
+function LessonView({ lesson, module, completed, saving, saveError, onToggleComplete, onQuiz }: { lesson: Lesson; module?: { week: number; title: string }; completed: boolean; saving: boolean; saveError: Error | null; onToggleComplete: () => void; onQuiz: () => void }) {
+  return <article className="pt-6"><p className="text-sm font-semibold text-primary">Module {module?.week} · {lesson.estimatedMinutes ?? 30} min</p><h3 className="mt-1 text-3xl font-bold tracking-tight">{lesson.title}</h3>{lesson.summary && <p className="mt-3 max-w-3xl text-lg leading-8 text-muted-foreground">{lesson.summary}</p>}<div className="mt-7 grid gap-5">{lesson.content.map((section, index) => <section key={`${section.heading ?? "section"}-${index}`} className={section.type === "tip" ? "rounded-xl bg-accent p-5" : ""}>{section.heading && <h4 className="text-lg font-bold">{section.heading}</h4>}{section.body && <p className="mt-2 max-w-3xl whitespace-pre-line leading-7 text-muted-foreground">{section.body}</p>}{section.bullets?.length ? <ul className="mt-4 grid max-w-3xl gap-2">{section.bullets.map((bullet) => <li key={bullet} className="flex gap-2"><Check className="mt-1 shrink-0 text-primary" size={16} aria-hidden="true" />{bullet}</li>)}</ul> : null}</section>)}</div><section className="mt-8 rounded-xl border bg-muted/40 p-5"><h4 className="font-bold">By the end of this lesson, you can</h4><ul className="mt-3 grid gap-2">{lesson.outcomes.map((outcome) => <li key={outcome} className="flex gap-2 text-sm"><CheckCircle2 className="shrink-0 text-primary" size={16} aria-hidden="true" />{outcome}</li>)}</ul></section>{lesson.sourceUrls.length ? <p className="mt-5 text-sm text-muted-foreground">Continue with: {lesson.sourceUrls.map((url, index) => { const href = safeUrl(url); return href ? <a key={url} className="ml-1 text-primary underline" href={href} target="_blank" rel="noreferrer">source {index + 1}</a> : null; })}</p> : null}<div className="mt-7 flex flex-wrap gap-3"><Button onClick={onToggleComplete} disabled={saving} className="gap-2">{saving ? <LoaderCircle className="animate-spin" size={17} /> : <CheckCircle2 size={17} />}{completed ? "Mark lesson incomplete" : "Mark lesson complete"}</Button><Button variant="secondary" onClick={onQuiz}>Take the quiz</Button></div>{saveError && <p className="mt-3 text-sm text-red-700 dark:text-red-300" role="alert">Progress could not be saved. Your progress is retained in this browser for now.</p>}</article>;
+}
+
+function QuizView({ run, token, onWork }: { run: LearningRun; token: string; onWork: () => void }) {
+  const questions = quizQuestions(run); const [answers, setAnswers] = useState<Record<string, string>>({}); const [result, setResult] = useState<QuizResult>();
+  const mutation = useMutation({ mutationFn: () => submitQuiz(run.id, "course-quiz", questions.map((question) => ({ questionId: question.id, answer: answers[question.id] ?? "" })), token), onSuccess: setResult });
+  if (!questions.length) return <section className="pt-6"><h3 className="text-2xl font-bold">Knowledge check</h3><p className="mt-2 text-muted-foreground">Your quiz is being prepared alongside the course.</p></section>;
+  return <section className="pt-6"><h3 className="text-2xl font-bold">Knowledge check</h3><p className="mt-2 text-muted-foreground">Answer in your own words. Your feedback will point you to what to revisit.</p><div className="mt-6 grid gap-6">{questions.map((question, index) => <fieldset key={question.id} className="grid gap-3"><legend className="font-semibold">{index + 1}. {question.prompt}</legend>{question.type === "multiple_choice" || question.type === "true_false" ? <div className="grid gap-2">{(question.options ?? (question.type === "true_false" ? ["True", "False"] : [])).map((option) => <label key={option} className="flex cursor-pointer items-center gap-2 rounded-lg border p-3 hover:bg-muted"><input type="radio" name={question.id} value={option} checked={answers[question.id] === option} onChange={() => setAnswers((current) => ({ ...current, [question.id]: option }))} />{option}</label>)}</div> : <textarea className="min-h-28 rounded-xl border bg-card p-3 leading-6" value={answers[question.id] ?? ""} onChange={(event) => setAnswers((current) => ({ ...current, [question.id]: event.target.value }))} placeholder="Write your answer…" />}</fieldset>)}</div><div className="mt-7 flex flex-wrap gap-3"><Button onClick={() => mutation.mutate()} disabled={mutation.isPending || questions.some((question) => !answers[question.id]?.trim())} className="gap-2">{mutation.isPending ? <LoaderCircle className="animate-spin" size={17} /> : <Send size={17} />}Submit answers</Button>{mutation.error && <p className="self-center text-sm text-red-700 dark:text-red-300" role="alert">{mutation.error instanceof Error ? mutation.error.message : "Your quiz could not be submitted."}</p>}</div>{result && <ResultCard result={result} onNext={onWork} nextLabel="Start assignment" />}</section>;
+}
+
+function WorkView({ run, token }: { run: LearningRun; token: string }) {
+  const [kind, setKind] = useState<"assignment" | "project">("assignment"); const [response, setResponse] = useState(""); const [result, setResult] = useState<SubmissionResult>();
+  const prompt = workPrompt(run, kind);
+  const mutation = useMutation({ mutationFn: () => submitWork(run.id, kind, response, token), onSuccess: setResult });
+  return <section className="pt-6"><h3 className="text-2xl font-bold">Put it into practice</h3><div className="mt-5 flex gap-2"><Button variant={kind === "assignment" ? "default" : "secondary"} onClick={() => { setKind("assignment"); setResult(undefined); }}>Assignment</Button><Button variant={kind === "project" ? "default" : "secondary"} onClick={() => { setKind("project"); setResult(undefined); }}>Project</Button></div><Card className="mt-5"><p className="text-sm font-semibold uppercase tracking-wider text-primary">{kind}</p><p className="mt-2 leading-7">{prompt}</p></Card><label className="mt-5 grid gap-2 font-semibold" htmlFor="submission">Your {kind}<textarea id="submission" className="min-h-40 rounded-xl border bg-card p-3 text-base font-normal leading-6" value={response} onChange={(event) => setResponse(event.target.value)} placeholder="Describe your approach, paste your work, or share a link and the key decisions you made…" /></label><div className="mt-5 flex flex-wrap gap-3"><Button onClick={() => mutation.mutate()} disabled={mutation.isPending || response.trim().length < 20} className="gap-2">{mutation.isPending ? <LoaderCircle className="animate-spin" size={17} /> : <Send size={17} />}Submit {kind}</Button><span className="self-center text-sm text-muted-foreground">At least 20 characters</span></div>{mutation.error && <p className="mt-3 text-sm text-red-700 dark:text-red-300" role="alert">{mutation.error instanceof Error ? mutation.error.message : "Your work could not be submitted."}</p>}{result && <ResultCard result={result} />}</section>;
+}
+
+function ResultCard({ result, onNext, nextLabel }: { result: QuizResult | SubmissionResult; onNext?: () => void; nextLabel?: string }) { return <Card className="mt-7 border-primary/30 bg-accent/40"><div className="flex gap-3"><Trophy className="shrink-0 text-primary" aria-hidden="true" /><div><h4 className="font-bold">Feedback received{result.scorePercent !== undefined ? ` · ${result.scorePercent}%` : ""}</h4><p className="mt-1 leading-6 text-muted-foreground">{result.feedback}</p>{result.recommendation && <p className="mt-3 text-sm font-semibold">Next step: {result.recommendation}</p>}{onNext && <Button className="mt-4" onClick={onNext}>{nextLabel}</Button>}</div></div></Card>; }

@@ -6,7 +6,7 @@ import { AlertTriangle, BookOpenCheck } from "lucide-react";
 import { AppShell } from "@/components/app-shell";
 import { AuthPanel } from "@/components/auth-panel";
 import { IntakeForm } from "@/components/intake-form";
-import { OutlineView } from "@/components/outline-view";
+import { CoursePlayer } from "@/components/course-player";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { createLearningRun, getMe, type TopicIntent } from "@/lib/api";
@@ -31,7 +31,7 @@ export default function Home() {
     <div className="grid gap-8">
       {generation.error && <p role="alert" className="rounded-xl border border-red-200 bg-red-50 p-4 text-red-800 dark:border-red-900 dark:bg-red-950 dark:text-red-200">{generation.error instanceof Error ? generation.error.message : "We couldn’t generate that outline. Please try again."}</p>}
       <IntakeForm onSubmit={generation.mutate} pending={generation.isPending} />
-      {run && <OutlineView run={run} />}
+      {run && <CoursePlayer run={run} token={token} />}
     </div>
   </AppShell>;
 }
