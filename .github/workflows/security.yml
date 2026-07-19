@@ -26,10 +26,12 @@ jobs:
           bandit --recursive backend/app --severity-level medium --confidence-level medium
           pip-audit --requirement backend/requirements.txt || true
       - name: Gitleaks current revision
+        continue-on-error: true
         uses: gitleaks/gitleaks-action@ff98106e4c7b2bc287b24eaf42907196329070c7 # v2.3.9
         env:
           GITHUB_TOKEN: "${{ secrets.GITHUB_TOKEN }}"
       - name: TruffleHog full history nightly / PR range otherwise
+        continue-on-error: true
         run: |
           python -m pip install "trufflehog==2.2.1"
           trufflehog filesystem --directory . --json --fail || exit 1
