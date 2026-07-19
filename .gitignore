@@ -3,6 +3,7 @@ backend/.env
 mobile/.env
 /.env
 backend/*.db
+backend/*.db-journal
 backend/evaluation-report.json
 backend/benchmark.json
 __pycache__/
