@@ -1,0 +1,195 @@
+name: learning-coach
+
+# Local Docker-first stack. Only Caddy publishes a host port; all stores are
+# private to the internal network. Replace image tags with immutable digests
+# before deploying this file to staging or production.
+services:
+  reverse-proxy:
+    image: caddy:2.8.4-alpine
+    user: "10001:10001"
+    depends_on:
+      api:
+        condition: service_healthy
+    ports:
+      - "${HTTP_PORT:-8080}:8080"
+    volumes:
+      - ./infra/caddy/Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    read_only: true
+    tmpfs:
+      - /tmp
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    pids_limit: 100
+    mem_limit: 128m
+    cpus: "0.25"
+    networks: [edge, internal]
+    restart: unless-stopped
+
+  api:
+    build:
+      context: .
+      dockerfile: backend/Dockerfile
+    env_file: ./backend/.env
+    environment:
+      DATABASE_URL: postgresql+asyncpg://learning_coach:${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}@postgres:5432/learning_coach
+    depends_on:
+      postgres:
+        condition: service_healthy
+    read_only: true
+    tmpfs:
+      - /tmp
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    pids_limit: 256
+    mem_limit: 512m
+    cpus: "1.0"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health')"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+    networks: [internal]
+    restart: unless-stopped
+
+  postgres:
+    image: postgres:16.4-alpine
+    environment:
+      POSTGRES_DB: learning_coach
+      POSTGRES_USER: learning_coach
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    read_only: true
+    tmpfs:
+      - /tmp
+      - /var/run/postgresql
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    pids_limit: 200
+    mem_limit: 512m
+    cpus: "1.0"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U learning_coach -d learning_coach"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks: [internal]
+    restart: unless-stopped
+
+  neo4j:
+    image: neo4j:5.26-community
+    environment:
+      NEO4J_AUTH: neo4j/${NEO4J_PASSWORD:?Set NEO4J_PASSWORD in .env}
+    volumes:
+      - neo4j_data:/data
+      - neo4j_logs:/logs
+    read_only: true
+    tmpfs: [/tmp]
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    pids_limit: 300
+    mem_limit: 1g
+    cpus: "1.0"
+    networks: [internal]
+    restart: unless-stopped
+
+  qdrant:
+    image: qdrant/qdrant:v1.13.4
+    volumes:
+      - qdrant_data:/qdrant/storage
+    read_only: true
+    tmpfs: [/tmp]
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    pids_limit: 200
+    mem_limit: 512m
+    cpus: "0.75"
+    networks: [internal]
+    restart: unless-stopped
+
+  minio:
+    image: minio/minio:RELEASE.2025-01-20T14-49-07Z
+    command: server /data --console-address :9001
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER:?Set MINIO_ROOT_USER in .env}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:?Set MINIO_ROOT_PASSWORD in .env}
+    volumes:
+      - minio_data:/data
+    read_only: true
+    tmpfs: [/tmp]
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    pids_limit: 200
+    mem_limit: 512m
+    cpus: "0.75"
+    networks: [internal]
+    restart: unless-stopped
+
+  prometheus:
+    image: prom/prometheus:v3.1.0
+    command: ["--config.file=/etc/prometheus/prometheus.yml", "--storage.tsdb.path=/prometheus"]
+    volumes:
+      - ./infra/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus_data:/prometheus
+    read_only: true
+    tmpfs: [/tmp]
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    pids_limit: 100
+    mem_limit: 512m
+    cpus: "0.5"
+    networks: [internal]
+    restart: unless-stopped
+
+  loki:
+    image: grafana/loki:3.3.2
+    command: -config.file=/etc/loki/local-config.yaml
+    volumes:
+      - loki_data:/loki
+    read_only: true
+    tmpfs: [/tmp]
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    pids_limit: 100
+    mem_limit: 512m
+    cpus: "0.5"
+    networks: [internal]
+    restart: unless-stopped
+
+  grafana:
+    image: grafana/grafana:11.4.0
+    environment:
+      GF_SECURITY_ADMIN_USER: ${GRAFANA_ADMIN_USER:-admin}
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:?Set GRAFANA_ADMIN_PASSWORD in .env}
+      GF_SERVER_HTTP_PORT: 3000
+    volumes:
+      - grafana_data:/var/lib/grafana
+    read_only: true
+    tmpfs: [/tmp]
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    pids_limit: 150
+    mem_limit: 512m
+    cpus: "0.5"
+    networks: [internal]
+    restart: unless-stopped
+
+networks:
+  edge: {}
+  internal:
+    internal: true
+
+volumes:
+  caddy_data: {}
+  caddy_config: {}
+  postgres_data: {}
+  neo4j_data: {}
+  neo4j_logs: {}
+  qdrant_data: {}
+  minio_data: {}
+  prometheus_data: {}
+  loki_data: {}
+  grafana_data: {}
