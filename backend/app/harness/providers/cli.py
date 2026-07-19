@@ -55,9 +55,12 @@ class CliRuntime:
     @staticmethod
     def _set_if_missing(environment: dict[str, str], destination: str, source: str) -> None:
         # os.environ.copy() can preserve an existing uppercase spelling on Windows.
-        # Resolve keys case-insensitively before forwarding a local .env alias.
-        source_value = next((value for key, value in environment.items() if key.casefold() == source.casefold()), None)
-        destination_value = next((value for key, value in environment.items() if key.casefold() == destination.casefold()), None)
+        # Prefer the canonical key exactly; only use a case-insensitive lookup when
+        # locating the source alias. On Linux, the two Gemini names are distinct.
+        destination_value = environment.get(destination)
+        source_value = environment.get(source)
+        if source_value is None:
+            source_value = next((value for key, value in environment.items() if key.casefold() == source.casefold()), None)
         if not destination_value and source_value:
             environment[destination] = source_value
 
