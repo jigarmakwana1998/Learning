@@ -12,6 +12,10 @@ jobs:
   backend:
     name: Backend lint and tests
     runs-on: ubuntu-24.04
+    env:
+      ADMIN_PASSWORD: AdminPass123!
+      SUPABASE_URL: ""
+      SUPABASE_PUBLISHABLE_KEY: ""
     defaults:
       run: { working-directory: backend }
     steps:
