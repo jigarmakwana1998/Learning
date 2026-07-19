@@ -198,12 +198,14 @@ def upgrade():
     # deduplication indexes required by the ingestion ladder.
     if op.get_bind().dialect.name == "postgresql":
         for key in ("doi", "isbn", "openalex", "arxiv"):
+            # nosemgrep: python.sqlalchemy.security.audit.avoid-sqlalchemy-text.avoid-sqlalchemy-text -- key is from the fixed tuple above, never user input.
             op.execute(sa.text(f"CREATE UNIQUE INDEX uq_resources_external_{key} ON resources ((external_ids->>'{key}')) WHERE external_ids ? '{key}'"))
 
 
 def downgrade():
     if op.get_bind().dialect.name == "postgresql":
         for key in ("doi", "isbn", "openalex", "arxiv"):
+            # nosemgrep: python.sqlalchemy.security.audit.avoid-sqlalchemy-text.avoid-sqlalchemy-text -- key is from the fixed tuple above, never user input.
             op.execute(sa.text(f"DROP INDEX IF EXISTS uq_resources_external_{key}"))
     for name, table in [
         ("ix_claims_staging_status", "claims_staging"), ("ix_claims_staging_run_id", "claims_staging"),
