@@ -1,5 +1,6 @@
 # Broad compatible ranges keep local setup working on supported Python releases.
 fastapi>=0.115,<1
+dishka>=1.6,<2
 uvicorn[standard]>=0.34,<1
 pydantic>=2.12,<3
 dishka>=1.6,<2
