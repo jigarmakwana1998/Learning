@@ -44,6 +44,12 @@ Docker image performs the same setup automatically. Authenticate Gemini by
 setting `GEMINI_API_KEY` in `backend/.env`; browser installation itself does not
 make a paid model request.
 
+The committed `.gemini/settings.json` registers the local `learning-browser`
+MCP server. Gemini may discover only `browser_search` and `browser_read`; no
+global Gemini configuration is required. Start the API or Gemini CLI from either
+the repository root or `backend/`. The Docker image copies the same project
+configuration into `/app/.gemini`.
+
 ```bash
 cd backend
 uv sync --group dev

@@ -1,4 +1,6 @@
+import ipaddress
 from datetime import datetime, timezone
+from urllib.parse import SplitResult, urlsplit, urlunsplit
 
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -39,7 +41,7 @@ class LearningService:
                 examiner_session, _ = await harness.start_and_run(run.id, examiner.name, examiner.build_prompt(goal, {"curriculum": "local deterministic course"}))
                 result = self._mock_run(goal, provider, {"Researcher": research_session.id, "Planner": planner_session.id, "Examiner": examiner_session.id})
             else:
-                research = ResearchBrief.model_validate(research_output)
+                research = self._verified_research(research_output)
                 planner_session, planner_output = await harness.start_and_run(run.id, planner.name, planner.build_prompt(goal, research.model_dump()))
                 raw_curriculum = [CurriculumModule.model_validate(item) for item in planner_output["curriculum"]]
                 curriculum = self._enrich_curriculum(goal, raw_curriculum)
@@ -58,6 +60,90 @@ class LearningService:
             run.status, run.completed_at = "failed", datetime.now(timezone.utc)
             await db.commit()
             raise
+
+    @classmethod
+    def _verified_research(cls, research_output: dict) -> ResearchBrief:
+        """Keep only unique citations backed by a successful browser_read result."""
+        research = ResearchBrief.model_validate(research_output)
+        visited_urls = {
+            normalized
+            for url in getattr(research_output, "visited_urls", ())
+            if (normalized := cls._normalize_evidence_url(url)) is not None
+        }
+        verified: list[Source] = []
+        seen: set[str] = set()
+        for source in research.sources:
+            normalized = cls._normalize_evidence_url(source.url)
+            if (
+                normalized is None
+                or normalized not in visited_urls
+                or normalized in seen
+                or cls._is_search_results_url(normalized)
+            ):
+                continue
+            seen.add(normalized)
+            verified.append(source.model_copy(update={"url": normalized}))
+            if len(verified) == 12:
+                break
+        if len(verified) < 8:
+            raise ValueError(
+                "Research requires at least 8 unique browser-verified sources; "
+                f"received {len(verified)}. Run browser_read on every source before citing it."
+            )
+        return research.model_copy(update={"sources": verified})
+
+    @staticmethod
+    def _normalize_evidence_url(url: object) -> str | None:
+        """Normalize citation URLs without performing another network lookup."""
+        if not isinstance(url, str) or not url.strip() or len(url) > 4096:
+            return None
+        try:
+            parsed = urlsplit(url.strip())
+            port = parsed.port
+        except ValueError:
+            return None
+        if (
+            parsed.scheme.casefold() != "https"
+            or not parsed.hostname
+            or parsed.username is not None
+            or parsed.password is not None
+            or port not in (None, 443)
+        ):
+            return None
+        try:
+            hostname = parsed.hostname.rstrip(".").encode("idna").decode("ascii").casefold()
+        except UnicodeError:
+            return None
+        if not hostname:
+            return None
+        try:
+            ipaddress.ip_address(hostname)
+        except ValueError:
+            pass
+        else:
+            return None
+        if hostname in {"localhost", "localhost.localdomain"} or hostname.endswith(
+            (".localhost", ".local", ".internal", ".home.arpa")
+        ):
+            return None
+        normalized = SplitResult(
+            scheme="https",
+            netloc=hostname,
+            path=parsed.path or "/",
+            query=parsed.query,
+            fragment="",
+        )
+        return urlunsplit(normalized)
+
+    @staticmethod
+    def _is_search_results_url(url: str) -> bool:
+        parsed = urlsplit(url)
+        hostname = parsed.hostname or ""
+        if hostname in {"duckduckgo.com", "html.duckduckgo.com"}:
+            return True
+        if hostname in {"bing.com", "www.bing.com"} and parsed.path.casefold().startswith("/search"):
+            return True
+        return hostname in {"google.com", "www.google.com"} and parsed.path.casefold().startswith("/search")
 
     def _mock_run(self, goal: LearningGoal, provider: str, sessions: dict[str, str]) -> LearningRun:
         source = Source(

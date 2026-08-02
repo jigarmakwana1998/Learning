@@ -45,6 +45,7 @@ RUN pip install --no-cache-dir -r requirements.txt
 COPY backend/app ./app
 COPY backend/alembic ./alembic
 COPY backend/alembic.ini ./alembic.ini
+COPY .gemini ./.gemini
 
 RUN chown -R app:app /app
 

@@ -1,0 +1,26 @@
+{
+  "$schema": "https://raw.githubusercontent.com/google-gemini/gemini-cli/main/schemas/settings.schema.json",
+  "mcp": {
+    "allowed": [
+      "learning-browser"
+    ]
+  },
+  "mcpServers": {
+    "learning-browser": {
+      "command": "python",
+      "args": [
+        "-m",
+        "app.browser.server"
+      ],
+      "env": {
+        "PYTHONPATH": "backend"
+      },
+      "timeout": 200000,
+      "trust": true,
+      "includeTools": [
+        "browser_search",
+        "browser_read"
+      ]
+    }
+  }
+}
