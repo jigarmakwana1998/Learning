@@ -5,6 +5,11 @@
     "snapshot",
     "scroll",
     "wait",
-    "get"
+    "get",
+    "url",
+    "title",
+    "text",
+    "gettext",
+    "close"
   ]
 }

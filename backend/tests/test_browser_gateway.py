@@ -1,5 +1,4 @@
 import asyncio
-import asyncio
 import json
 
 import pytest
@@ -38,6 +37,16 @@ class FakeBrowser:
     async def close(self, session, host):
         self.closed.append((session, host))
 
+    async def run_batch(self, session, host, commands):
+        results = []
+        for command in commands:
+            if command[0] == "close":
+                await self.close(session, host)
+                results.append({"closed": True})
+            else:
+                results.append(await self.run(session, host, *command))
+        return results
+
 
 class FailedBrowser(FakeBrowser):
     async def run(self, session, host, *arguments):
@@ -61,6 +70,32 @@ async def test_search_uses_browser_page_validates_results_and_cleans_up():
     assert client.calls[0][2][0] == "open"
     assert "duckduckgo.com" in client.calls[0][2][1]
     assert client.closed
+
+
+@pytest.mark.asyncio
+async def test_bing_rss_fallback_is_parsed_as_browser_content():
+    class BingFallbackBrowser(FakeBrowser):
+        async def run(self, session, host, *arguments):
+            if arguments[0] == "snapshot":
+                return {"snapshot": "No usable search results"}
+            if arguments[:3] == ("get", "text", "body") and host == "www.bing.com":
+                return {
+                    "content": (
+                        "<rss><channel><item><title>Attention Is All You Need</title>"
+                        "<link>https://arxiv.org/abs/1706.03762</link></item></channel></rss>"
+                    )
+                }
+            return await super().run(session, host, *arguments)
+
+    gateway = BrowserGateway(client=BingFallbackBrowser(), resolver=public_resolver)
+
+    result = await gateway.browser_search("attention transformers", 5)
+
+    assert result["status"] == "ok"
+    assert result["engine"] == "bing"
+    assert result["results"] == [
+        {"title": "Attention Is All You Need", "url": "https://arxiv.org/abs/1706.03762"}
+    ]
 
 
 @pytest.mark.asyncio
@@ -133,18 +168,18 @@ def test_client_uses_argument_array_and_enforces_security_environment(monkeypatc
     monkeypatch.setenv("AGENT_BROWSER_ALLOWED_DOMAINS", "anything.example")
     monkeypatch.setenv("GEMINI_API_KEY", "must-not-reach-browser")
     monkeypatch.setenv("DATABASE_URL", "must-not-reach-browser")
-    environment = client._environment("example.com,*.example.com")
+    environment = client._environment("example.com")
     assert "AGENT_BROWSER_PROFILE" not in environment
     assert "GEMINI_API_KEY" not in environment
     assert "DATABASE_URL" not in environment
-    assert environment["AGENT_BROWSER_ALLOWED_DOMAINS"] == "example.com,*.example.com"
+    assert environment["AGENT_BROWSER_ALLOWED_DOMAINS"] == "example.com"
     assert environment["AGENT_BROWSER_CONTENT_BOUNDARIES"] == "1"
     assert environment["AGENT_BROWSER_IDLE_TIMEOUT_MS"] == "15000"
     assert environment["AGENT_BROWSER_NO_AUTO_DIALOG"] == "1"
     policy = json.loads(client.policy_path.read_text())
     assert policy == {
         "default": "deny",
-        "allow": ["navigate", "snapshot", "scroll", "wait", "get"],
+        "allow": ["navigate", "snapshot", "scroll", "wait", "get", "url", "title", "text", "gettext", "close"],
     }
 
 
@@ -170,6 +205,33 @@ async def test_client_passes_untrusted_url_as_one_subprocess_argument(monkeypatc
     await client.run("safe-session", "example.com", "open", hostile_url)
 
     assert captured["command"][-2:] == ("open", hostile_url)
+    assert "shell" not in captured["kwargs"]
+
+
+@pytest.mark.asyncio
+async def test_batch_passes_untrusted_urls_as_json_stdin(monkeypatch):
+    captured = {}
+
+    class Process:
+        returncode = 0
+
+        async def communicate(self, value):
+            captured["stdin"] = value
+            return b'[{"success":true,"result":{}},{"success":true,"result":{"closed":true}}]', b""
+
+    async def create_process(*command, **kwargs):
+        captured["command"] = command
+        captured["kwargs"] = kwargs
+        return Process()
+
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", create_process)
+    client = AgentBrowserClient(command=["agent-browser"])
+    hostile_url = "https://example.com/?q=one;whoami&two"
+
+    await client.run_batch("safe-session", "example.com", [["open", hostile_url], ["close"]])
+
+    assert captured["command"][-2:] == ("batch", "--json")
+    assert json.loads(captured["stdin"]) == [["open", hostile_url], ["close"]]
     assert "shell" not in captured["kwargs"]
 
 

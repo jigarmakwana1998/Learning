@@ -26,6 +26,10 @@ _SNAPSHOT_LINK = re.compile(
     r"(?P<url>https?://[^\s\"'\]]+)",
     re.IGNORECASE,
 )
+_RSS_ITEM = re.compile(
+    r"<item>.*?<title>(?P<title>.*?)</title>.*?<link>(?P<url>https?://[^<]+)</link>.*?</item>",
+    re.IGNORECASE | re.DOTALL,
+)
 
 
 @dataclass
@@ -68,18 +72,41 @@ class BrowserGateway:
 
         engines = (
             ("duckduckgo", "https://html.duckduckgo.com/html/?" + urlencode({"q": query})),
-            ("bing", "https://www.bing.com/search?" + urlencode({"q": query})),
+            ("bing", "https://www.bing.com/search?" + urlencode({"q": query, "format": "rss"})),
         )
         failures: list[str] = []
+        results: list[dict[str, str]] = []
+        seen: set[str] = set()
+        used_engines: list[str] = []
         for engine, search_url in engines:
             try:
-                results = await self._search_page(search_url, limit)
+                candidates = await self._search_page(search_url, min(5, limit - len(results)))
             except (AgentBrowserError, UrlPolicyError) as error:
                 failures.append(type(error).__name__)
                 continue
-            if results:
-                return {"status": "ok", "engine": engine, "query": query, "results": results}
-            failures.append("no_results")
+            added = False
+            for candidate in candidates:
+                if candidate["url"] in seen:
+                    continue
+                seen.add(candidate["url"])
+                results.append(candidate)
+                added = True
+                if len(results) >= limit:
+                    break
+            if added:
+                used_engines.append(engine)
+            else:
+                failures.append("no_results")
+            if len(results) >= limit:
+                break
+        if results:
+            return {
+                "status": "ok",
+                "engine": used_engines[0],
+                "engines": used_engines,
+                "query": query,
+                "results": results,
+            }
         return {
             "status": "unavailable",
             "error": {"code": "search_unavailable", "message": "Public search pages returned no usable results"},
@@ -126,30 +153,55 @@ class BrowserGateway:
         host = hostname_for_url(normalized)
         session = self._next_session()
         try:
-            await self._run_browser(session, host, "open", normalized)
-            final_payload = await self._run_browser(session, host, "get", "url")
+            results = await self._run_browser_batch(
+                session,
+                host,
+                [
+                    ["open", normalized],
+                    ["get", "url"],
+                    ["snapshot", "-i", "--urls", "-c", "-d", "5"],
+                    ["get", "text", "body"],
+                    ["close"],
+                ],
+            )
+            final_payload = results[1]
             await self._validate(output_text(final_payload, "url"))
-            snapshot = await self._run_browser(session, host, "snapshot", "-i", "--urls", "-c", "-d", "5")
-            return await self._parse_results(output_text(snapshot, "snapshot", "text"), normalized, limit)
-        finally:
+            snapshot = results[2]
+            body = results[3]
+            searchable_text = "\n".join(
+                (output_text(snapshot, "snapshot", "text"), output_text(body, "content", "text"))
+            )
+            return await self._parse_results(searchable_text, normalized, limit)
+        except Exception:
             await self.client.close(session, host)
+            raise
 
     async def _read_page(self, normalized: str) -> dict[str, Any]:
         host = hostname_for_url(normalized)
         session = self._next_session()
         try:
-            await self._run_browser(session, host, "open", normalized)
-            final_payload = await self._run_browser(session, host, "get", "url")
+            results = await self._run_browser_batch(
+                session,
+                host,
+                [
+                    ["open", normalized],
+                    ["get", "url"],
+                    ["get", "title"],
+                    ["scroll", "down", "800"],
+                    ["scroll", "down", "800"],
+                    ["get", "text", "body"],
+                    ["close"],
+                ],
+            )
+            final_payload = results[1]
             final_url = await self._validate(output_text(final_payload, "url"))
             # The CLI allowlist blocks cross-domain redirects before content is read.
             if hostname_for_url(final_url) != host:
                 raise AgentBrowserError("cross-domain redirect requires a separate browser_read call")
-            title_payload = await self._run_browser(session, host, "get", "title")
-            for _ in range(2):
-                await self._run_browser(session, host, "scroll", "down", "800")
+            title_payload = results[2]
             # v0.27.3 predates the `read` command; rendered body text is the
             # compatible, browser-backed extraction path for the pinned CLI.
-            content_payload = await self._run_browser(session, host, "get", "text", "body")
+            content_payload = results[5]
             content = output_text(content_payload, "content", "text")[:MAX_PAGE_CHARACTERS]
             if not content.strip():
                 raise AgentBrowserError("page did not expose readable text")
@@ -162,14 +214,16 @@ class BrowserGateway:
                 "content_is_untrusted": True,
                 "truncated": len(output_text(content_payload, "content", "text")) > MAX_PAGE_CHARACTERS,
             }
-        finally:
+        except Exception:
             await self.client.close(session, host)
+            raise
 
     async def _parse_results(self, text: str, base_url: str, limit: int) -> list[dict[str, str]]:
         candidates: list[tuple[str, str]] = list(_MARKDOWN_LINK.findall(text))
         candidates.extend(
             ((match.group("title") or "Search result", match.group("url")) for match in _SNAPSHOT_LINK.finditer(text))
         )
+        candidates.extend((match.group("title"), match.group("url")) for match in _RSS_ITEM.finditer(text))
         results: list[dict[str, str]] = []
         seen: set[str] = set()
         for title, raw_url in candidates:
@@ -178,7 +232,7 @@ class BrowserGateway:
                 normalized = await self._validate(candidate)
             except UrlPolicyError:
                 continue
-            if normalized in seen or hostname_for_url(normalized) in {"duckduckgo.com", "html.duckduckgo.com", "bing.com", "www.bing.com"}:
+            if normalized in seen or not _is_discovery_result(normalized, hostname_for_url(base_url)):
                 continue
             seen.add(normalized)
             results.append({"title": _clean_title(title), "url": normalized})
@@ -204,12 +258,12 @@ class BrowserGateway:
         kwargs = {"resolver": self._resolver} if self._resolver is not None else {}
         return await asyncio.to_thread(validate_public_https_url, url, **kwargs)
 
-    async def _run_browser(self, session: str, host: str, *arguments: str) -> Any:
+    async def _run_browser_batch(self, session: str, host: str, commands: list[list[str]]) -> list[Any]:
         remaining = MAX_ELAPSED_SECONDS - (self._clock() - self._budget.started_at)
         if remaining <= 0:
             raise AgentBrowserError("browser research time budget expired")
         try:
-            return await asyncio.wait_for(self.client.run(session, host, *arguments), timeout=remaining)
+            return await asyncio.wait_for(self.client.run_batch(session, host, commands), timeout=remaining)
         except TimeoutError as error:
             raise AgentBrowserError("browser research time budget expired") from error
 
@@ -234,3 +288,10 @@ def _unwrap_search_redirect(url: str) -> str:
 
 def _clean_title(value: str) -> str:
     return " ".join(value.replace("\\", "").split())[:300] or "Search result"
+
+
+def _is_discovery_result(url: str, search_host: str) -> bool:
+    parsed = urlsplit(url)
+    host = (parsed.hostname or "").casefold()
+    blocked_search_hosts = ("duckduckgo.com", "bing.com")
+    return not any(host == blocked or host.endswith(f".{blocked}") for blocked in blocked_search_hosts)

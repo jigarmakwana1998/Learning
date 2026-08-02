@@ -66,13 +66,13 @@ def _native_package_binary(package_directory: Path) -> Path | None:
 class AgentBrowserClient:
     """Use one ephemeral, domain-confined Chrome session per browser operation."""
 
-    def __init__(self, *, command: list[str] | None = None, timeout_seconds: float = 30) -> None:
+    def __init__(self, *, command: list[str] | None = None, timeout_seconds: float = 90) -> None:
         self.command = list(command or resolve_agent_browser_command())
         self.timeout_seconds = timeout_seconds
         self.policy_path = Path(__file__).with_name("action-policy.json").resolve()
 
     async def run(self, session: str, host: str, *arguments: str) -> Any:
-        allowed_domains = f"{host},*.{host}"
+        allowed_domains = host
         command = [
             *self.command,
             "--session",
@@ -113,9 +113,62 @@ class AgentBrowserClient:
             raise AgentBrowserError("agent-browser reported an unsuccessful operation")
         return payload.get("data", payload) if isinstance(payload, dict) else payload
 
+    async def run_batch(self, session: str, host: str, commands: list[list[str]]) -> list[Any]:
+        """Execute one JSON batch so browser state never depends on daemon handoff.
+
+        The native Windows CLI can leave its daemon holding captured stdout pipes
+        between separate invocations. A single stdin JSON batch is both faster and
+        keeps every untrusted URL as structured data instead of command text.
+        """
+        allowed_domains = host
+        command = [
+            *self.command,
+            "--session",
+            session,
+            "--content-boundaries",
+            "--max-output",
+            "6000",
+            "--allowed-domains",
+            allowed_domains,
+            "--action-policy",
+            str(self.policy_path),
+            "batch",
+            "--json",
+        ]
+        try:
+            process = await asyncio.create_subprocess_exec(
+                *command,
+                stdin=asyncio.subprocess.PIPE,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+                env=self._environment(allowed_domains),
+            )
+        except FileNotFoundError as error:
+            raise AgentBrowserError("agent-browser executable was not found") from error
+        try:
+            stdout, _stderr = await asyncio.wait_for(
+                process.communicate(json.dumps(commands).encode("utf-8")),
+                timeout=self.timeout_seconds,
+            )
+        except TimeoutError as error:
+            process.kill()
+            await process.wait()
+            raise AgentBrowserError("agent-browser operation timed out") from error
+        if process.returncode != 0:
+            raise AgentBrowserError("agent-browser could not complete the read-only operation")
+        try:
+            payload = json.loads(stdout.decode("utf-8"))
+        except (UnicodeDecodeError, json.JSONDecodeError) as error:
+            raise AgentBrowserError("agent-browser returned invalid JSON") from error
+        if not isinstance(payload, list) or len(payload) != len(commands):
+            raise AgentBrowserError("agent-browser returned an invalid batch result")
+        if any(not isinstance(item, dict) or item.get("success") is not True for item in payload):
+            raise AgentBrowserError("agent-browser reported an unsuccessful operation")
+        return [item.get("result") for item in payload]
+
     async def close(self, session: str, host: str) -> None:
         try:
-            await self.run(session, host, "close")
+            await self.run_batch(session, host, [["close"]])
         except AgentBrowserError:
             # Cleanup must not replace the useful navigation error.
             pass
