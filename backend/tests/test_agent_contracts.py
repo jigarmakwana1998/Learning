@@ -2,12 +2,24 @@ import json
 
 import pytest
 
-from app.agents import ExaminerAgent, PlannerAgent, ResearcherAgent
+from app.agents import (
+    ExaminerAgent, PlannerAgent, ResearcherAgent, ResearchSelectorAgent,
+    ResearchSynthesisAgent,
+)
 from app.schemas.learning import LearningGoal
 from app.mcp.tools import LEARNING_TOOLS, RESEARCH_TOOLS
 
 
-@pytest.mark.parametrize("agent", [ResearcherAgent(), PlannerAgent(), ExaminerAgent()])
+@pytest.mark.parametrize(
+    "agent",
+    [
+        ResearcherAgent(),
+        ResearchSelectorAgent(),
+        ResearchSynthesisAgent(),
+        PlannerAgent(),
+        ExaminerAgent(),
+    ],
+)
 def test_agents_emit_machine_readable_prompt_contracts(agent):
     payload = json.loads(agent.build_prompt(LearningGoal(topic="Python", weeks=4)))
     assert payload["agent"] == agent.name

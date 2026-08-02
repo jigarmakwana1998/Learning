@@ -305,6 +305,14 @@ class CliRuntime:
             if rate_delay is not None:
                 raise _RateLimited(rate_delay)
             raise ValueError("Gemini stream did not contain a result event")
+        if str(final_event.get("status", "success")).casefold() not in {"success", "ok", "completed"}:
+            if rate_delay is not None:
+                raise _RateLimited(rate_delay)
+            # Terminal diagnostics can contain account, project, or request details.
+            # Keep the public error actionable without echoing the provider payload.
+            raise RuntimeError(
+                "gemini-cli returned a provider error. Check provider availability and quota."
+            )
 
         response = final_event.get("response")
         if isinstance(response, dict):

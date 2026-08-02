@@ -7,11 +7,14 @@ from app.schemas.learning import LearningRunRequest
 from app.services.learning_service import LearningService
 
 
+SOURCE_KINDS = ("documentation", "paper", "book", "lecture", "article", "repository")
+
+
 def source(index: int, url: str | None = None) -> dict:
     return {
         "title": f"Source {index}",
         "url": url or f"https://docs.example.com/source-{index}",
-        "kind": "documentation",
+        "kind": SOURCE_KINDS[index % len(SOURCE_KINDS)],
         "rationale": f"Evidence for part {index}",
     }
 
@@ -59,6 +62,15 @@ def test_caps_verified_sources_at_twelve():
     research = LearningService._verified_research(research_output(sources))
 
     assert len(research.sources) == 12
+
+
+def test_rejects_a_brief_without_the_required_source_mix():
+    sources = [source(index) for index in range(8)]
+    for item in sources:
+        item["kind"] = "documentation"
+
+    with pytest.raises(ValueError, match="must cover documentation, paper, book, lecture, and article"):
+        LearningService._verified_research(research_output(sources))
 
 
 @pytest.mark.parametrize(

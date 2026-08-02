@@ -212,6 +212,22 @@ def test_stream_json_rejects_malformed_or_incomplete_output():
         CliRuntime._parse_stream_response('{"type":"init"}')
 
 
+def test_stream_json_surfaces_terminal_provider_error_without_leaking_diagnostics():
+    output = "\n".join([
+        json.dumps({"type": "init", "session_id": "secret-session"}),
+        json.dumps({
+            "type": "result",
+            "status": "error",
+            "error": {"type": "unknown", "message": "account=private-project"},
+        }),
+    ])
+
+    with pytest.raises(RuntimeError, match="provider error") as raised:
+        CliRuntime._parse_stream_response(output)
+
+    assert "private-project" not in str(raised.value)
+
+
 @pytest.mark.asyncio
 async def test_structured_rate_limit_retries_once_and_hides_diagnostics(monkeypatch):
     calls = 0

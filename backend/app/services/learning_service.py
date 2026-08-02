@@ -1,16 +1,23 @@
 import ipaddress
 from datetime import datetime, timezone
+from time import perf_counter
 from urllib.parse import SplitResult, urlsplit, urlunsplit
 
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.agents import ExaminerAgent, PlannerAgent, ResearcherAgent
+from app.agents import (
+    ExaminerAgent, PlannerAgent, ResearcherAgent, ResearchSelectorAgent,
+    ResearchSynthesisAgent,
+)
+from app.browser.gateway import BrowserGateway
 from app.core.config import get_settings
 from app.harness import AgentHarness
+from app.harness.providers.factory import get_runtime
+from app.mcp.audit import record_tool_invocation
 from app.models.database import (
-    AgentRun, AssignmentSubmissionRecord, LearningRequest, LessonProgressRecord,
-    QuizSubmissionRecord, SystemSetting, User,
+    AgentRun, AgentSessionRecord, AssignmentSubmissionRecord, LearningRequest,
+    LessonProgressRecord, QuizSubmissionRecord, SystemSetting, User,
 )
 from app.schemas.learning import (
     Assessment, Assignment, AssignmentSubmissionResponse, Course, CurriculumModule,
@@ -20,6 +27,8 @@ from app.schemas.learning import (
 
 
 class LearningService:
+    browser_gateway_factory = BrowserGateway
+
     async def create_run(self, db: AsyncSession, user: User, request: LearningRunRequest) -> LearningRun:
         configured = await db.scalar(select(SystemSetting).where(SystemSetting.key == "agent_provider"))
         provider = configured.value if configured else get_settings().agent_provider
@@ -35,22 +44,25 @@ class LearningService:
         harness = AgentHarness(provider, db)
         researcher, planner, examiner = ResearcherAgent(), PlannerAgent(), ExaminerAgent()
         try:
-            research_session, research_output = await harness.start_and_run(run.id, researcher.name, researcher.build_prompt(goal))
             if provider == "mock":
+                research_session, _ = await harness.start_and_run(run.id, researcher.name, researcher.build_prompt(goal))
                 planner_session, _ = await harness.start_and_run(run.id, planner.name, planner.build_prompt(goal, {"research": "local deterministic course"}))
                 examiner_session, _ = await harness.start_and_run(run.id, examiner.name, examiner.build_prompt(goal, {"curriculum": "local deterministic course"}))
                 result = self._mock_run(goal, provider, {"Researcher": research_session.id, "Planner": planner_session.id, "Examiner": examiner_session.id})
             else:
-                research = self._verified_research(research_output)
+                research_session, research = await self._research_with_fallback(
+                    db, harness, run.id, provider, goal, researcher
+                )
                 planner_session, planner_output = await harness.start_and_run(run.id, planner.name, planner.build_prompt(goal, research.model_dump()))
-                raw_curriculum = [CurriculumModule.model_validate(item) for item in planner_output["curriculum"]]
-                curriculum = self._enrich_curriculum(goal, raw_curriculum)
-                examiner_session, _ = await harness.start_and_run(run.id, examiner.name, examiner.build_prompt(goal, {"curriculum": [item.model_dump() for item in curriculum]}))
+                curriculum = self._provider_curriculum(goal, planner_output, research)
+                # Keep the current deterministic assessment as a compatibility
+                # placeholder. Course content is complete at this point, so do not
+                # spend quota or make success depend on another provider call.
                 assessment = self._build_assessment(goal)
                 result = LearningRun(
                     id=run.id, provider=provider, research=research, curriculum=curriculum,
                     course=Course(title=f"{goal.topic} learning path", modules=curriculum), assessment=assessment,
-                    sessions={"Researcher": research_session.id, "Planner": planner_session.id, "Examiner": examiner_session.id},
+                    sessions={"Researcher": research_session.id, "Planner": planner_session.id},
                 )
             result.id = run.id
             run.status, run.result, run.completed_at = "completed", result.model_dump(mode="json"), datetime.now(timezone.utc)
@@ -60,6 +72,271 @@ class LearningService:
             run.status, run.completed_at = "failed", datetime.now(timezone.utc)
             await db.commit()
             raise
+
+    async def _research_with_fallback(
+        self,
+        db: AsyncSession,
+        harness: AgentHarness,
+        run_id: str,
+        provider: str,
+        goal: LearningGoal,
+        researcher: ResearcherAgent,
+    ) -> tuple[AgentSessionRecord, ResearchBrief]:
+        """Use MCP research first and recover only from Gemini terminal errors."""
+        try:
+            session, output = await harness.start_and_run(
+                run_id, researcher.name, researcher.build_prompt(goal)
+            )
+        except RuntimeError as error:
+            if provider != "gemini-cli" or not self._is_fallback_research_error(error):
+                raise
+            return await self._fallback_research(db, run_id, provider, goal)
+        return session, self._verified_research(output)
+
+    @staticmethod
+    def _is_fallback_research_error(error: RuntimeError) -> bool:
+        message = str(error).casefold()
+        if "rate limit exceeded" in message:
+            return False
+        return (
+            "returned a provider error" in message
+            or "must emit the configured json response format" in message
+            or "timed out" in message
+        )
+
+    async def _fallback_research(
+        self,
+        db: AsyncSession,
+        run_id: str,
+        provider: str,
+        goal: LearningGoal,
+    ) -> tuple[AgentSessionRecord, ResearchBrief]:
+        """Bounded direct-browser recovery with two plain Gemini decisions."""
+        gateway = self.browser_gateway_factory()
+        audit_session = AgentSessionRecord(
+            agent_run_id=run_id,
+            agent_name="ResearchFallbackBrowser",
+            provider=provider,
+            input_payload={"agent": "Researcher", "fallback": "direct-browser"},
+        )
+        db.add(audit_session)
+        await db.flush()
+        started = perf_counter()
+        try:
+            candidates: list[dict[str, str]] = []
+            seen_candidates: set[str] = set()
+            queries = (
+                f"{goal.topic} official documentation research paper book",
+                f"{goal.topic} university lecture course explanatory article",
+            )
+            for query in queries:
+                call_started = perf_counter()
+                result = await gateway.browser_search(query, limit=10)
+                await self._audit_fallback_browser_call(
+                    db, audit_session.id, "browser_search", result, call_started
+                )
+                for item in result.get("results", []):
+                    if not isinstance(item, dict):
+                        continue
+                    normalized = self._normalize_evidence_url(item.get("url"))
+                    if (
+                        normalized is None
+                        or normalized in seen_candidates
+                        or self._is_search_results_url(normalized)
+                    ):
+                        continue
+                    seen_candidates.add(normalized)
+                    candidates.append(
+                        {"title": str(item.get("title") or "Public source")[:300], "url": normalized}
+                    )
+            if len(candidates) < 8:
+                raise ValueError(
+                    f"Browser fallback requires at least 8 public candidates; received {len(candidates)}."
+                )
+
+            selector = ResearchSelectorAgent()
+            selector_session, selector_output = await self._plain_fallback_call(
+                db,
+                run_id,
+                provider,
+                selector.name,
+                selector.build_prompt(goal, {"candidates": candidates[:20]}),
+            )
+            selections = self._validated_fallback_selections(selector_output, candidates)
+            selected_urls = [item["url"] for item in selections]
+            remaining_urls = [item["url"] for item in candidates if item["url"] not in set(selected_urls)]
+            ordered_urls = [*selected_urls, *remaining_urls][:12]
+            kind_hints = {item["url"]: item["kind"] for item in selections}
+
+            pages: list[dict[str, object]] = []
+            seen_pages: set[str] = set()
+            for offset in range(0, len(ordered_urls), 4):
+                if len(pages) >= 8:
+                    break
+                batch = ordered_urls[offset : offset + 4]
+                call_started = perf_counter()
+                result = await gateway.browser_read(batch)
+                await self._audit_fallback_browser_call(
+                    db, audit_session.id, "browser_read", result, call_started
+                )
+                for page in result.get("pages", []):
+                    if not isinstance(page, dict) or str(page.get("status", "")).casefold() != "ok":
+                        continue
+                    normalized = self._normalize_evidence_url(page.get("url"))
+                    content = str(page.get("content") or "")[:4000]
+                    if normalized is None or normalized in seen_pages or not content.strip():
+                        continue
+                    seen_pages.add(normalized)
+                    pages.append(
+                        {
+                            "url": normalized,
+                            "title": str(page.get("title") or "Public source")[:500],
+                            "kind_hint": kind_hints.get(normalized),
+                            "content": content,
+                            "content_is_untrusted": True,
+                        }
+                    )
+                    if len(pages) == 8:
+                        break
+            if len(pages) < 8:
+                raise ValueError(
+                    f"Browser fallback requires 8 readable public sources; received {len(pages)}."
+                )
+
+            synthesis = ResearchSynthesisAgent()
+            synthesis_session, synthesis_output = await self._plain_fallback_call(
+                db,
+                run_id,
+                provider,
+                synthesis.name,
+                synthesis.build_prompt(goal, {"pages": pages}),
+            )
+            from app.harness import AgentResult
+
+            research = self._verified_research(
+                AgentResult(synthesis_output, visited_urls=frozenset(seen_pages))
+            )
+            audit_session.status = "completed"
+            audit_session.output_payload = {
+                "candidate_count": len(candidates),
+                "selected_count": len(selections),
+                "read_count": len(pages),
+                "selector_session_id": selector_session.id,
+                "synthesis_session_id": synthesis_session.id,
+            }
+            return synthesis_session, research
+        except Exception:
+            audit_session.status = "failed"
+            audit_session.error_message = "Direct browser research fallback failed."
+            raise
+        finally:
+            audit_session.completed_at = datetime.now(timezone.utc)
+            audit_session.duration_ms = int((perf_counter() - started) * 1000)
+            await db.flush()
+
+    async def _plain_fallback_call(
+        self,
+        db: AsyncSession,
+        run_id: str,
+        provider: str,
+        role: str,
+        prompt: str,
+    ) -> tuple[AgentSessionRecord, dict]:
+        """Call a non-MCP role without persisting browser page bodies in transcripts."""
+        session = AgentSessionRecord(
+            agent_run_id=run_id,
+            agent_name=role,
+            provider=provider,
+            input_payload={"agent": role, "fallback": True},
+        )
+        db.add(session)
+        await db.flush()
+        started = perf_counter()
+        try:
+            execution = await get_runtime(provider, role).execute(prompt)
+            payload = execution.payload if hasattr(execution, "payload") else execution
+            if not isinstance(payload, dict):
+                raise ValueError(f"{role} must return a JSON object.")
+            session.output_payload = payload
+            session.status = "completed"
+            return session, payload
+        except Exception as error:
+            session.status = "failed"
+            session.error_message = str(error)[:2000]
+            raise
+        finally:
+            session.completed_at = datetime.now(timezone.utc)
+            session.duration_ms = int((perf_counter() - started) * 1000)
+            await db.flush()
+
+    @classmethod
+    def _validated_fallback_selections(
+        cls,
+        output: dict,
+        candidates: list[dict[str, str]],
+    ) -> list[dict[str, str]]:
+        selections = output.get("selections") if isinstance(output, dict) else None
+        if not isinstance(selections, list) or len(selections) != 8:
+            raise ValueError("ResearchSelector must choose exactly 8 candidates.")
+        allowed_urls = {item["url"] for item in candidates}
+        allowed_kinds = {"documentation", "paper", "book", "lecture", "article", "repository"}
+        validated: list[dict[str, str]] = []
+        seen: set[str] = set()
+        for item in selections:
+            if not isinstance(item, dict):
+                raise ValueError("ResearchSelector returned an invalid selection.")
+            normalized = cls._normalize_evidence_url(item.get("url"))
+            kind = item.get("kind")
+            if normalized not in allowed_urls or normalized in seen or kind not in allowed_kinds:
+                raise ValueError("ResearchSelector must use unique candidate URLs and supported kinds.")
+            seen.add(normalized)
+            validated.append({"url": normalized, "kind": kind})
+        required = {"documentation", "paper", "book", "lecture", "article"}
+        if missing := required - {item["kind"] for item in validated}:
+            raise ValueError(
+                "ResearchSelector source mix is incomplete; missing: " + ", ".join(sorted(missing))
+            )
+        return validated
+
+    @classmethod
+    async def _audit_fallback_browser_call(
+        cls,
+        db: AsyncSession,
+        session_id: str,
+        tool_name: str,
+        result: dict,
+        started_at: float,
+    ) -> None:
+        items = result.get("results") if tool_name == "browser_search" else result.get("pages")
+        items = items if isinstance(items, list) else []
+        urls: list[str] = []
+        success_count = 0
+        for item in items:
+            if not isinstance(item, dict):
+                continue
+            if tool_name == "browser_search" or str(item.get("status", "")).casefold() == "ok":
+                success_count += 1
+            normalized = cls._normalize_evidence_url(item.get("url"))
+            if normalized and normalized not in urls:
+                urls.append(normalized)
+        domains = sorted({urlsplit(url).hostname for url in urls if urlsplit(url).hostname})
+        status = "success" if result.get("status") == "ok" else "failed"
+        error_payload = result.get("error") if isinstance(result.get("error"), dict) else {}
+        await record_tool_invocation(
+            db,
+            session_id,
+            tool_name,
+            status,
+            {
+                "urls": urls[:20],
+                "domains": domains[:20],
+                "result_count": len(items),
+                "success_count": success_count,
+                "fallback": True,
+            },
+            str(error_payload.get("code") or "Browser operation unavailable") if status == "failed" else None,
+            started_at=started_at,
+        )
 
     @classmethod
     def _verified_research(cls, research_output: dict) -> ResearchBrief:
@@ -90,7 +367,121 @@ class LearningService:
                 "Research requires at least 8 unique browser-verified sources; "
                 f"received {len(verified)}. Run browser_read on every source before citing it."
             )
+        required_kinds = {"documentation", "paper", "book", "lecture", "article"}
+        missing_kinds = required_kinds - {source.kind for source in verified}
+        if missing_kinds:
+            raise ValueError(
+                "Research must cover documentation, paper, book, lecture, and article sources; "
+                f"missing: {', '.join(sorted(missing_kinds))}."
+            )
         return research.model_copy(update={"sources": verified})
+
+    @classmethod
+    def _provider_curriculum(
+        cls,
+        goal: LearningGoal,
+        planner_output: dict,
+        research: ResearchBrief,
+    ) -> list[CurriculumModule]:
+        """Validate complete provider-authored lessons and their evidence links."""
+        payload = planner_output.get("curriculum") if isinstance(planner_output, dict) else None
+        if not isinstance(payload, list):
+            raise ValueError("Planner must return a curriculum array.")
+        try:
+            modules = [CurriculumModule.model_validate(item) for item in payload]
+        except (TypeError, ValueError) as error:
+            raise ValueError("Planner returned an invalid curriculum structure.") from error
+
+        expected_weeks = set(range(1, goal.weeks + 1))
+        actual_weeks = [module.week for module in modules]
+        if len(actual_weeks) != goal.weeks or set(actual_weeks) != expected_weeks:
+            raise ValueError(
+                f"Planner must return exactly one module for each week 1 through {goal.weeks}."
+            )
+
+        verified_sources = {source.url: source for source in research.sources}
+        verified_urls = set(verified_sources)
+        seen_lesson_ids: set[str] = set()
+        grounded: list[CurriculumModule] = []
+        for module in sorted(modules, key=lambda item: item.week):
+            cls._validate_module_content(module, goal)
+            module_urls = cls._grounded_source_urls(
+                module.source_urls, verified_urls, f"module week {module.week}"
+            )
+            if not any(
+                verified_sources[url].kind in {"documentation", "paper", "book"}
+                for url in module_urls
+            ):
+                raise ValueError(
+                    f"Planner module week {module.week} must cite a verified primary source."
+                )
+            if len(module.lessons) < 2:
+                raise ValueError(
+                    f"Planner module week {module.week} must contain at least two complete lessons."
+                )
+            lessons: list[Lesson] = []
+            for lesson in module.lessons:
+                if lesson.id in seen_lesson_ids:
+                    raise ValueError(f"Planner lesson id must be unique: {lesson.id}")
+                seen_lesson_ids.add(lesson.id)
+                cls._validate_lesson_content(lesson, module.week)
+                lesson_urls = cls._grounded_source_urls(
+                    lesson.source_urls or module_urls,
+                    verified_urls,
+                    f"lesson {lesson.id}",
+                )
+                lessons.append(lesson.model_copy(update={"source_urls": lesson_urls}))
+            if sum(lesson.estimated_minutes for lesson in lessons) > goal.hours_per_week * 60:
+                raise ValueError(
+                    f"Planner module week {module.week} lesson time exceeds the learner's weekly-hour budget."
+                )
+            grounded.append(
+                module.model_copy(update={"source_urls": module_urls, "lessons": lessons})
+            )
+        return grounded
+
+    @staticmethod
+    def _validate_module_content(module: CurriculumModule, goal: LearningGoal) -> None:
+        if len(module.title.strip()) < 3 or len(module.overview.strip()) < 40:
+            raise ValueError(f"Planner module week {module.week} needs a complete title and overview.")
+        if len(module.outcomes) < 2 or any(len(outcome.strip()) < 10 for outcome in module.outcomes):
+            raise ValueError(f"Planner module week {module.week} needs at least two concrete outcomes.")
+        if module.estimated_hours > goal.hours_per_week:
+            raise ValueError(
+                f"Planner module week {module.week} exceeds the learner's weekly-hour budget."
+            )
+
+    @classmethod
+    def _grounded_source_urls(
+        cls,
+        urls: list[str],
+        verified_urls: set[str],
+        owner: str,
+    ) -> list[str]:
+        normalized_urls: list[str] = []
+        for raw_url in urls:
+            normalized = cls._normalize_evidence_url(raw_url)
+            if normalized is None or normalized not in verified_urls:
+                raise ValueError(f"Planner cited an unverified source URL in {owner}.")
+            if normalized not in normalized_urls:
+                normalized_urls.append(normalized)
+        if not normalized_urls:
+            raise ValueError(f"Planner must cite at least one verified source URL in {owner}.")
+        return normalized_urls
+
+    @staticmethod
+    def _validate_lesson_content(lesson: Lesson, week: int) -> None:
+        fields = {
+            "title": (lesson.title, 3),
+            "objective": (lesson.objective, 12),
+            "content": (lesson.content, 1200),
+            "practice": (lesson.practice, 20),
+        }
+        for name, (value, minimum) in fields.items():
+            if not isinstance(value, str) or len(value.strip()) < minimum:
+                raise ValueError(
+                    f"Planner lesson {lesson.id or '<unknown>'} in week {week} needs complete {name}."
+                )
 
     @staticmethod
     def _normalize_evidence_url(url: object) -> str | None:
@@ -200,6 +591,7 @@ class LearningService:
                     ),
                     practice=f"Create a one-page {goal.topic} note with three terms, one tiny example, and one question to investigate.",
                     estimated_minutes=max(20, min(90, goal.hours_per_week * 12)),
+                    source_urls=module.source_urls,
                 ),
                 Lesson(
                     id=f"week-{week}-apply",
@@ -212,6 +604,7 @@ class LearningService:
                     ),
                     practice=f"Complete a 30-minute {goal.topic} exercise and save the starting point, final result, and a short reflection.",
                     estimated_minutes=max(20, min(90, goal.hours_per_week * 12)),
+                    source_urls=module.source_urls,
                 ),
             ]
             enriched.append(module.model_copy(update={
