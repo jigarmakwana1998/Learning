@@ -13,6 +13,47 @@ class FakeProcess:
         return json.dumps({"response": '{"topic":"Attention","sources":[]}', "stats": {}}).encode(), b""
 
 
+class StreamReader:
+    def __init__(self, lines):
+        self.lines = iter(lines)
+
+    async def readline(self):
+        return next(self.lines, b"")
+
+    async def read(self, _limit=-1):
+        return b""
+
+
+@pytest.mark.asyncio
+async def test_streaming_execution_finishes_on_result_without_waiting_for_eof(monkeypatch):
+    final = json.dumps({"type": "result", "response": {"ok": True}}).encode() + b"\n"
+
+    class StreamingProcess:
+        pid = 1234
+        returncode = None
+        stdout = StreamReader([final])
+        stderr = StreamReader([])
+
+    process = StreamingProcess()
+    terminated = []
+
+    async def create_process(*_command, **_kwargs):
+        return process
+
+    async def terminate(value):
+        terminated.append(value.pid)
+        value.returncode = -1
+
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", create_process)
+    monkeypatch.setattr(CliRuntime, "_terminate_process_tree", staticmethod(terminate))
+    runtime = CliRuntime("gemini-cli", ["gemini"], "UNSET_GEMINI_COMMAND", stream_json=True)
+
+    execution = await runtime.execute("prompt")
+
+    assert execution.payload == {"ok": True}
+    assert terminated == [1234]
+
+
 @pytest.mark.asyncio
 async def test_gemini_runtime_maps_local_env_and_unwraps_response(monkeypatch):
     captured = {}
@@ -81,6 +122,18 @@ def test_stream_json_collects_sanitized_browser_evidence():
     assert "untrusted page body" not in json.dumps(tool.metadata)
 
 
+def test_stream_json_collects_final_json_from_assistant_deltas_for_gemini_051():
+    output = "\n".join([
+        json.dumps({"type": "message", "role": "assistant", "content": '{"ok":', "delta": True}),
+        json.dumps({"type": "message", "role": "assistant", "content": "true}", "delta": True}),
+        json.dumps({"type": "result", "status": "success", "stats": {"tool_calls": 0}}),
+    ])
+
+    execution = CliRuntime._parse_stream_response(output)
+
+    assert execution.payload == {"ok": True}
+
+
 def test_stream_json_does_not_treat_search_results_as_visited_pages():
     output = "\n".join([
         json.dumps({"type": "tool_use", "tool_id": "call-1", "tool_name": "browser_search"}),
@@ -106,6 +159,24 @@ def test_browser_read_evidence_excludes_unavailable_and_requested_urls():
                 {"status": "ok", "requested_url": "https://example.com/requested", "url": "https://example.com/final"},
                 {"status": "unavailable", "url": "https://example.org/not-read"},
             ]},
+        }),
+        json.dumps({"type": "result", "response": {"topic": "Attention", "sources": []}}),
+    ])
+
+    execution = CliRuntime._parse_stream_response(output)
+
+    assert execution.visited_urls == frozenset({"https://example.com/final"})
+
+
+def test_fully_qualified_mcp_browser_read_name_produces_evidence():
+    output = "\n".join([
+        json.dumps({
+            "type": "tool_use", "tool_id": "read",
+            "tool_name": "mcp_learning-browser_browser_read",
+        }),
+        json.dumps({
+            "type": "tool_result", "tool_id": "read", "status": "success",
+            "output": {"pages": [{"status": "ok", "url": "https://example.com/final"}]},
         }),
         json.dumps({"type": "result", "response": {"topic": "Attention", "sources": []}}),
     ])

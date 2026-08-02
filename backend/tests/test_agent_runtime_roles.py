@@ -1,3 +1,4 @@
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
@@ -15,8 +16,13 @@ def test_researcher_gemini_enables_only_learning_browser(monkeypatch):
 
     assert runtime.stream_json is True
     assert "stream-json" in runtime.command
-    assert runtime.command[-1] == "learning-browser"
+    assert runtime.command[runtime.command.index("--allowed-mcp-server-names") + 1] == "learning-browser"
+    assert runtime.command[runtime.command.index("--allowed-tools") + 1] == (
+        "mcp_learning-browser_browser_search,mcp_learning-browser_browser_read"
+    )
     assert runtime.timeout_seconds == 300
+    assert runtime.working_directory is not None
+    assert (Path(runtime.working_directory) / ".gemini" / "settings.json").is_file()
 
 
 def test_gemini_prefers_pinned_project_local_entrypoint(monkeypatch):
@@ -50,6 +56,7 @@ def test_non_researcher_gemini_disables_browser_and_uses_json(monkeypatch):
         assert "stream-json" not in runtime.command
         assert "json" in runtime.command
         assert runtime.command[-1] == "browser-disabled"
+        assert "--allowed-tools" not in runtime.command
 
 
 def test_other_provider_commands_are_unchanged(monkeypatch):
@@ -66,9 +73,10 @@ def test_gemini_command_override_cannot_omit_role_safety_flags(monkeypatch):
     runtime = get_runtime("gemini-cli", "Researcher")
 
     assert runtime.command[:3] == ["custom-gemini", "--model", "fast"]
-    assert runtime.command[-6:] == [
+    assert runtime.command[-8:] == [
         "--output-format", "stream-json", "--approval-mode", "plan",
         "--allowed-mcp-server-names", "learning-browser",
+        "--allowed-tools", "mcp_learning-browser_browser_search,mcp_learning-browser_browser_read",
     ]
 
 

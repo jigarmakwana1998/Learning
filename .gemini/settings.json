@@ -1,9 +1,15 @@
 {
   "$schema": "https://raw.githubusercontent.com/google-gemini/gemini-cli/main/schemas/settings.schema.json",
+  "general": {
+    "plan": {
+      "modelRouting": false
+    }
+  },
   "mcp": {
     "allowed": [
       "learning-browser"
-    ]
+    ],
+    "autoAllowInHeadless": true
   },
   "mcpServers": {
     "learning-browser": {

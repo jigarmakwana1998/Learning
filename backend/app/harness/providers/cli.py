@@ -60,6 +60,7 @@ class CliRuntime:
         self.prompt_flag = prompt_flag
         self.stream_json = stream_json
         self.timeout_seconds = timeout_seconds
+        self.working_directory = self._gemini_project_directory() if name == "gemini-cli" else None
 
     async def execute(self, prompt: str) -> ProviderExecution:
         attempts = 2 if self.name == "gemini-cli" else 1
@@ -103,6 +104,7 @@ class CliRuntime:
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
                 env=environment,
+                cwd=self.working_directory,
                 **process_group_options,
             )
         except FileNotFoundError as error:
@@ -112,7 +114,13 @@ class CliRuntime:
 
         timeout = self.timeout_seconds or int(os.getenv("AGENT_CLI_TIMEOUT_SECONDS", "120"))
         try:
-            stdout, stderr = await asyncio.wait_for(process.communicate(prompt_bytes), timeout=timeout)
+            if self.stream_json:
+                stdout, stderr, terminal_result = await asyncio.wait_for(
+                    self._read_stream_until_result(process), timeout=timeout
+                )
+            else:
+                stdout, stderr = await asyncio.wait_for(process.communicate(prompt_bytes), timeout=timeout)
+                terminal_result = False
         except TimeoutError as error:
             await self._terminate_process_tree(process)
             raise RuntimeError(
@@ -121,7 +129,7 @@ class CliRuntime:
 
         stdout_text = stdout.decode(errors="replace")
         stderr_text = stderr.decode(errors="replace")
-        if process.returncode != 0:
+        if process.returncode != 0 and not terminal_result:
             retry_after = self._structured_rate_limit_delay(stdout_text, stderr_text)
             if retry_after is not None:
                 raise _RateLimited(retry_after)
@@ -137,6 +145,46 @@ class CliRuntime:
             raise RuntimeError(
                 f"{self.name} must emit the configured JSON response format."
             ) from error
+
+    async def _read_stream_until_result(
+        self, process: asyncio.subprocess.Process
+    ) -> tuple[bytes, bytes, bool]:
+        """Read JSONL through its terminal event instead of waiting for child-pipe EOF."""
+        if process.stdout is None or process.stderr is None:
+            raise RuntimeError(f"{self.name} streaming pipes were not created.")
+        stderr_task = asyncio.create_task(process.stderr.read(262_144))
+        lines: list[bytes] = []
+        total = 0
+        terminal_result = False
+        try:
+            while True:
+                line = await process.stdout.readline()
+                if not line:
+                    break
+                total += len(line)
+                if total > 4_194_304:
+                    raise RuntimeError(f"{self.name} exceeded its bounded streaming output.")
+                lines.append(line)
+                try:
+                    event = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                if isinstance(event, dict) and event.get("type") == "result":
+                    terminal_result = True
+                    break
+            if terminal_result:
+                await self._terminate_process_tree(process)
+            elif process.returncode is None:
+                await process.wait()
+            stderr = b"" if not stderr_task.done() else stderr_task.result()
+            return b"".join(lines), stderr, terminal_result
+        finally:
+            if not stderr_task.done():
+                stderr_task.cancel()
+                try:
+                    await stderr_task
+                except asyncio.CancelledError:
+                    pass
 
     def _environment(self) -> dict[str, str]:
         environment = os.environ.copy()
@@ -190,6 +238,15 @@ class CliRuntime:
         if script.is_file() and node:
             return [node, str(script), *default_command[1:]]
         return list(default_command)
+
+    @staticmethod
+    def _gemini_project_directory() -> str | None:
+        """Launch Gemini where the project-scoped .gemini settings are visible."""
+        candidates = [Path.cwd(), *Path(__file__).resolve().parents]
+        for candidate in candidates:
+            if (candidate / ".gemini" / "settings.json").is_file():
+                return str(candidate)
+        return None
 
     @staticmethod
     def _replace_windows_npm_shim(command: list[str]) -> list[str]:
@@ -257,7 +314,12 @@ class CliRuntime:
         elif isinstance(final_event.get("result"), dict):
             payload = final_event["result"]
         else:
-            raise TypeError("Gemini result response must be a JSON object")
+            assistant_response = "".join(
+                str(event.get("content", ""))
+                for event in events
+                if event.get("type") == "message" and event.get("role") == "assistant"
+            )
+            payload = json.loads(cls._without_markdown_fence(assistant_response))
         if not isinstance(payload, dict):
             raise TypeError("Gemini result response must be a JSON object")
 
@@ -292,7 +354,7 @@ class CliRuntime:
             status = "success" if raw_status in {"success", "succeeded", "completed", "ok"} else "failed"
             output = event.get("output", event.get("result", event.get("content")))
             urls = cls._extract_urls(output)
-            if tool_name == "browser_read" and status == "success":
+            if cls._is_browser_tool(tool_name, "browser_read") and status == "success":
                 visited_urls.update(cls._successful_read_urls(output))
             metadata = cls._audit_metadata(urls, output)
             completed.append(
@@ -309,6 +371,10 @@ class CliRuntime:
             tool_name = str(use.get("tool_name") or use.get("name") or "unknown")[:80]
             completed.append(ToolInvocationEvent(tool_name, "failed", error="Tool result was not returned"))
         return completed, visited_urls
+
+    @staticmethod
+    def _is_browser_tool(tool_name: str, short_name: str) -> bool:
+        return tool_name == short_name or tool_name.endswith(f"_{short_name}")
 
     @classmethod
     def _audit_metadata(cls, urls: set[str], output: Any) -> dict[str, Any]:

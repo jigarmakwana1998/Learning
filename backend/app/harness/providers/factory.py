@@ -21,6 +21,11 @@ def get_runtime(provider: AgentProvider, agent_name: str | None = None):
         "--approval-mode", "plan", "--allowed-mcp-server-names",
         "learning-browser" if is_researcher else "browser-disabled",
     ] if provider == "gemini-cli" else None
+    if provider == "gemini-cli" and is_researcher:
+        gemini_role_args.extend([
+            "--allowed-tools",
+            "mcp_learning-browser_browser_search,mcp_learning-browser_browser_read",
+        ])
     return CliRuntime(
         provider, command, env_var,
         prompt_flag="-p" if provider == "gemini-cli" else None,

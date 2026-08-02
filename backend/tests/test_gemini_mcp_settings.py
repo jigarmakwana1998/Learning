@@ -18,7 +18,11 @@ def _settings() -> dict:
 def test_only_learning_browser_mcp_server_is_allowed_and_registered():
     settings = _settings()
 
-    assert settings["mcp"] == {"allowed": ["learning-browser"]}
+    assert settings["general"]["plan"]["modelRouting"] is False
+    assert settings["mcp"] == {
+        "allowed": ["learning-browser"],
+        "autoAllowInHeadless": True,
+    }
     assert set(settings["mcpServers"]) == {"learning-browser"}
 
 
