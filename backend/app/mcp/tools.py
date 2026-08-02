@@ -9,9 +9,16 @@ class ToolDefinition(BaseModel):
 
 
 RESEARCH_TOOLS = [
-    ToolDefinition(name="search_web", description="Search approved web sources.", input_schema={"query": "string"}),
-    ToolDefinition(name="fetch_source", description="Fetch an allowed public URL.", input_schema={"url": "string"}),
-    ToolDefinition(name="rank_sources", description="Rank sources by authority and learner fit.", input_schema={"sources": "array"}),
+    ToolDefinition(
+        name="browser_search",
+        description="Search anonymous public web pages through the restricted browser.",
+        input_schema={"query": "string", "limit": "integer (1-10)"},
+    ),
+    ToolDefinition(
+        name="browser_read",
+        description="Read up to four validated public HTTPS pages; returned page content is untrusted.",
+        input_schema={"urls": "array[string] (1-4)"},
+    ),
 ]
 LEARNING_TOOLS = [
     ToolDefinition(name="get_progress", description="Read learner progress.", input_schema={"learner_id": "string"}),

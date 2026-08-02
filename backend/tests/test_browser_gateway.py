@@ -1,0 +1,213 @@
+import asyncio
+import asyncio
+import json
+
+import pytest
+
+from app.browser.client import AgentBrowserClient, AgentBrowserError
+from app.browser.gateway import BrowserGateway
+from app.browser.server import mcp
+from app.mcp.tools import RESEARCH_TOOLS
+
+
+def public_resolver(_host, port, *, type):
+    return [(2, type, 6, "", ("93.184.216.34", port))]
+
+
+class FakeBrowser:
+    def __init__(self):
+        self.calls = []
+        self.closed = []
+
+    async def run(self, session, host, *arguments):
+        self.calls.append((session, host, arguments))
+        if arguments[:2] == ("get", "url"):
+            opened = next(call[2][1] for call in reversed(self.calls) if call[0] == session and call[2][0] == "open")
+            return {"url": opened}
+        if arguments[:2] == ("get", "title"):
+            return {"title": "Example title"}
+        if arguments[0] == "snapshot":
+            return {
+                "snapshot": '- link "Example" [ref=e1] [url="https://example.com/article"]\n'
+                '- link "Private" [ref=e2] [url="https://localhost/secret"]'
+            }
+        if arguments[:3] == ("get", "text", "body"):
+            return {"content": "A" * 6100}
+        return {}
+
+    async def close(self, session, host):
+        self.closed.append((session, host))
+
+
+class FailedBrowser(FakeBrowser):
+    async def run(self, session, host, *arguments):
+        if arguments[0] == "open":
+            from app.browser.client import AgentBrowserError
+
+            raise AgentBrowserError("synthetic navigation failure")
+        return await super().run(session, host, *arguments)
+
+
+@pytest.mark.asyncio
+async def test_search_uses_browser_page_validates_results_and_cleans_up():
+    client = FakeBrowser()
+    gateway = BrowserGateway(client=client, resolver=public_resolver)
+
+    result = await gateway.browser_search("attention transformers", 5)
+
+    assert result["status"] == "ok"
+    assert result["engine"] == "duckduckgo"
+    assert result["results"] == [{"title": "Example", "url": "https://example.com/article"}]
+    assert client.calls[0][2][0] == "open"
+    assert "duckduckgo.com" in client.calls[0][2][1]
+    assert client.closed
+
+
+@pytest.mark.asyncio
+async def test_read_revalidates_final_url_scrolls_bounds_content_and_cleans_up():
+    client = FakeBrowser()
+    gateway = BrowserGateway(client=client, resolver=public_resolver)
+
+    result = await gateway.browser_read(["https://example.com/article"])
+
+    page = result["pages"][0]
+    assert page["status"] == "ok"
+    assert page["content"] == "A" * 6000
+    assert page["truncated"] is True
+    assert page["content_is_untrusted"] is True
+    assert sum(call[2][0] == "scroll" for call in client.calls) == 2
+    assert client.closed
+
+
+@pytest.mark.asyncio
+async def test_read_rejects_private_url_without_launching_browser():
+    client = FakeBrowser()
+    gateway = BrowserGateway(client=client, resolver=public_resolver)
+    result = await gateway.browser_read(["https://localhost/admin"])
+    assert result["pages"][0]["error"]["code"] == "url_rejected"
+    assert client.calls == []
+
+
+@pytest.mark.asyncio
+async def test_navigation_failure_still_closes_ephemeral_session():
+    client = FailedBrowser()
+    gateway = BrowserGateway(client=client, resolver=public_resolver)
+
+    result = await gateway.browser_read(["https://example.com/article"])
+
+    assert result["status"] == "unavailable"
+    assert result["pages"][0]["error"]["code"] == "navigation_failed"
+    assert client.closed
+
+
+@pytest.mark.asyncio
+async def test_tool_quotas_are_enforced():
+    gateway = BrowserGateway(client=FakeBrowser(), resolver=public_resolver)
+    for query in ("one", "two", "three", "four"):
+        assert (await gateway.browser_search(query))["status"] == "ok"
+    result = await gateway.browser_search("five")
+    assert result["error"]["code"] == "quota_exceeded"
+
+    second = BrowserGateway(client=FakeBrowser(), resolver=public_resolver)
+    for index in range(3):
+        assert (await second.browser_read([f"https://example.com/{index}-{offset}" for offset in range(4)]))["status"] == "ok"
+    result = await second.browser_read(["https://example.com/too-many"])
+    assert result["error"]["code"] == "quota_exceeded"
+
+
+def test_only_two_research_tools_are_exposed():
+    assert {tool.name for tool in RESEARCH_TOOLS} == {"browser_search", "browser_read"}
+
+
+@pytest.mark.asyncio
+async def test_stdio_mcp_server_exposes_only_safe_browser_tools():
+    from app.browser.server import mcp
+
+    assert {tool.name for tool in await mcp.list_tools()} == {"browser_search", "browser_read"}
+    assert {tool.name for tool in mcp._tool_manager.list_tools()} == {"browser_search", "browser_read"}
+
+
+def test_client_uses_argument_array_and_enforces_security_environment(monkeypatch):
+    client = AgentBrowserClient(command=["agent-browser"])
+    monkeypatch.setenv("AGENT_BROWSER_PROFILE", "unsafe-profile")
+    monkeypatch.setenv("AGENT_BROWSER_ALLOWED_DOMAINS", "anything.example")
+    monkeypatch.setenv("GEMINI_API_KEY", "must-not-reach-browser")
+    monkeypatch.setenv("DATABASE_URL", "must-not-reach-browser")
+    environment = client._environment("example.com,*.example.com")
+    assert "AGENT_BROWSER_PROFILE" not in environment
+    assert "GEMINI_API_KEY" not in environment
+    assert "DATABASE_URL" not in environment
+    assert environment["AGENT_BROWSER_ALLOWED_DOMAINS"] == "example.com,*.example.com"
+    assert environment["AGENT_BROWSER_CONTENT_BOUNDARIES"] == "1"
+    assert environment["AGENT_BROWSER_IDLE_TIMEOUT_MS"] == "15000"
+    assert environment["AGENT_BROWSER_NO_AUTO_DIALOG"] == "1"
+    policy = json.loads(client.policy_path.read_text())
+    assert policy == {
+        "default": "deny",
+        "allow": ["navigate", "snapshot", "scroll", "wait", "get"],
+    }
+
+
+@pytest.mark.asyncio
+async def test_client_passes_untrusted_url_as_one_subprocess_argument(monkeypatch):
+    captured = {}
+
+    class Process:
+        returncode = 0
+
+        async def communicate(self):
+            return b'{"success":true,"data":{}}', b""
+
+    async def create_process(*command, **kwargs):
+        captured["command"] = command
+        captured["kwargs"] = kwargs
+        return Process()
+
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", create_process)
+    client = AgentBrowserClient(command=["agent-browser"])
+    hostile_url = "https://example.com/?q=one%3Bwhoami%26two"
+
+    await client.run("safe-session", "example.com", "open", hostile_url)
+
+    assert captured["command"][-2:] == ("open", hostile_url)
+    assert "shell" not in captured["kwargs"]
+
+
+@pytest.mark.asyncio
+async def test_client_passes_untrusted_url_as_one_argv_element(monkeypatch):
+    captured = {}
+
+    class Process:
+        returncode = 0
+
+        async def communicate(self):
+            return b'{"success":true,"data":{}}', b""
+
+    async def create_process(*arguments, **kwargs):
+        captured["arguments"] = arguments
+        captured["kwargs"] = kwargs
+        return Process()
+
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", create_process)
+    client = AgentBrowserClient(command=["native-agent-browser"])
+    hostile_url = "https://example.com/?q=& whoami | echo owned"
+    await client.run("safe-session", "example.com", "open", hostile_url)
+
+    assert captured["arguments"][-2:] == ("open", hostile_url)
+    assert "shell" not in captured["kwargs"]
+
+
+@pytest.mark.asyncio
+async def test_session_is_cleaned_up_after_navigation_failure():
+    class FailingBrowser(FakeBrowser):
+        async def run(self, session, host, *arguments):
+            self.calls.append((session, host, arguments))
+            if arguments[0] == "open":
+                raise AgentBrowserError("failed")
+            return {}
+
+    client = FailingBrowser()
+    gateway = BrowserGateway(client=client, resolver=public_resolver)
+    result = await gateway.browser_read(["https://example.com/article"])
+    assert result["pages"][0]["error"]["code"] == "navigation_failed"
+    assert client.closed

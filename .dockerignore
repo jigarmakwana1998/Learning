@@ -2,6 +2,7 @@
 .github
 .agents
 backend/.venv
+backend/.uv-cache
 backend/.pytest_cache
 backend/.benchmarks
 backend/*.db
@@ -9,4 +10,5 @@ backend/benchmark.json
 backend/evaluation-report.json
 backend/.env
 mobile/node_modules
+/node_modules
 mobile/.env
