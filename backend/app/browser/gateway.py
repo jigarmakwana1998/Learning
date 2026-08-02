@@ -72,7 +72,13 @@ class BrowserGateway:
 
         engines = (
             ("duckduckgo", "https://html.duckduckgo.com/html/?" + urlencode({"q": query})),
-            ("bing", "https://www.bing.com/search?" + urlencode({"q": query, "format": "rss"})),
+            (
+                "bing",
+                "https://www.bing.com/search?"
+                + urlencode(
+                    {"q": query, "format": "rss", "adlt": "strict", "setlang": "en-US", "cc": "US"}
+                ),
+            ),
         )
         failures: list[str] = []
         results: list[dict[str, str]] = []

@@ -160,6 +160,11 @@ async def test_stdio_mcp_server_exposes_only_safe_browser_tools():
 
     assert {tool.name for tool in await mcp.list_tools()} == {"browser_search", "browser_read"}
     assert {tool.name for tool in mcp._tool_manager.list_tools()} == {"browser_search", "browser_read"}
+    for tool in await mcp.list_tools():
+        assert tool.annotations.readOnlyHint is True
+        assert tool.annotations.destructiveHint is False
+        assert tool.annotations.idempotentHint is True
+        assert tool.annotations.openWorldHint is True
 
 
 def test_client_uses_argument_array_and_enforces_security_environment(monkeypatch):
