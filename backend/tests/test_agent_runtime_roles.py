@@ -21,10 +21,21 @@ def test_researcher_gemini_enables_only_learning_browser(monkeypatch):
 
 def test_gemini_prefers_pinned_project_local_entrypoint(monkeypatch):
     monkeypatch.delenv("GEMINI_CLI_COMMAND", raising=False)
+    import app.harness.providers.cli as cli_module
+
+    original_is_file = cli_module.Path.is_file
+
+    def is_file(path):
+        return str(path).replace("\\", "/").endswith(
+            "node_modules/@google/gemini-cli/bundle/gemini.js"
+        ) or original_is_file(path)
+
+    monkeypatch.setattr(cli_module.Path, "is_file", is_file)
+    monkeypatch.setattr(cli_module.shutil, "which", lambda name, **_kwargs: "/runtime/node" if name == "node" else None)
 
     runtime = get_runtime("gemini-cli", "Researcher")
 
-    assert runtime.command[0].casefold().endswith("node.exe") or runtime.command[0].casefold().endswith("/node")
+    assert runtime.command[0] == "/runtime/node"
     assert runtime.command[1].replace("\\", "/").endswith(
         "node_modules/@google/gemini-cli/bundle/gemini.js"
     )
