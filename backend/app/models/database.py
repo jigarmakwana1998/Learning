@@ -51,6 +51,40 @@ class AgentRun(Base):
     completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
 
+class QuizSubmissionRecord(Base):
+    """Learner-owned, immutable grading snapshot for a generated run."""
+    __tablename__ = "learning_run_quiz_submissions"
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid4()))
+    agent_run_id: Mapped[str] = mapped_column(ForeignKey("agent_runs.id"), index=True)
+    user_id: Mapped[str] = mapped_column(ForeignKey("users.id"), index=True)
+    answers: Mapped[dict] = mapped_column(JSON)
+    score_percent: Mapped[int] = mapped_column(Integer)
+    feedback: Mapped[list] = mapped_column(JSON)
+    submitted_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now, index=True)
+
+
+class AssignmentSubmissionRecord(Base):
+    """The submitted work and deterministic feedback before rubric AI is added."""
+    __tablename__ = "learning_run_assignment_submissions"
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid4()))
+    agent_run_id: Mapped[str] = mapped_column(ForeignKey("agent_runs.id"), index=True)
+    user_id: Mapped[str] = mapped_column(ForeignKey("users.id"), index=True)
+    kind: Mapped[str] = mapped_column(String(24), default="assignment")
+    content: Mapped[str] = mapped_column(Text)
+    status: Mapped[str] = mapped_column(String(24), default="submitted")
+    feedback: Mapped[list] = mapped_column(JSON)
+    submitted_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now, index=True)
+
+
+class LessonProgressRecord(Base):
+    __tablename__ = "learning_run_lesson_progress"
+    agent_run_id: Mapped[str] = mapped_column(ForeignKey("agent_runs.id"), primary_key=True)
+    user_id: Mapped[str] = mapped_column(ForeignKey("users.id"), primary_key=True)
+    lesson_id: Mapped[str] = mapped_column(String(160), primary_key=True)
+    completed: Mapped[bool] = mapped_column(default=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now, onupdate=now)
+
+
 class AgentSessionRecord(Base):
     __tablename__ = "agent_sessions"
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid4()))
