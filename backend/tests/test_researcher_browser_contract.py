@@ -10,7 +10,10 @@ def test_researcher_uses_only_safe_browser_tools_and_requires_read_evidence():
 
     assert prompt["tools"] == ["browser_search", "browser_read"]
     instruction = prompt["instruction"]
-    assert "exactly 8 unique sources" in instruction
+    assert "8-12" in instruction
+    assert "exactly 12 candidate pages" in instruction
+    assert "four focused" in instruction
+    assert "key_points" in instruction
     assert "exact final URLs" in instruction
     assert "successful browser_read" in instruction
     assert "untrusted evidence" in instruction

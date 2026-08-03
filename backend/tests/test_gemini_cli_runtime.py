@@ -118,6 +118,7 @@ def test_stream_json_collects_sanitized_browser_evidence():
         "urls": ["https://example.com/paper"],
         "domains": ["example.com"],
         "result_count": 1,
+        "page_results": [{"url": "https://example.com/paper", "status": "read"}],
     }
     assert "untrusted page body" not in json.dumps(tool.metadata)
 

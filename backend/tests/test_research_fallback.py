@@ -10,7 +10,7 @@ from app.schemas.learning import LearningGoal
 from app.services.learning_service import LearningService
 
 
-KINDS = ("documentation", "paper", "book", "lecture", "article", "repository")
+KINDS = ("documentation", "paper", "book", "lecture", "slides", "article", "repository")
 
 
 class FakeDb:
@@ -77,7 +77,7 @@ class FakePlainRuntime:
                 payload={
                     "selections": [
                         {"url": item["url"], "kind": KINDS[index % len(KINDS)]}
-                        for index, item in enumerate(candidates[:8])
+                        for index, item in enumerate(candidates[:12])
                     ]
                 }
             )
@@ -91,6 +91,10 @@ class FakePlainRuntime:
                         "url": page["url"],
                         "kind": KINDS[index % len(KINDS)],
                         "rationale": f"Grounds the course section using readable evidence {index}.",
+                        "key_points": [
+                            f"Explains a concrete mechanism from readable source {index}.",
+                            f"Provides a limitation or worked example from source {index}.",
+                        ],
                     }
                     for index, page in enumerate(pages)
                 ],
@@ -119,18 +123,19 @@ async def test_direct_browser_fallback_is_bounded_grounded_and_body_free_in_audi
 
     assert session.agent_name == "ResearchSynthesis"
     assert calls == ["ResearchSelector", "ResearchSynthesis"]
-    assert len(gateway.searches) == 2
+    assert len(gateway.searches) == 4
     assert len(gateway.read_batches) == 3
     assert all(1 <= len(batch) <= 4 for batch in gateway.read_batches)
     assert sum(map(len, gateway.read_batches)) == 12
-    assert len(research.sources) == 8
+    assert len(research.sources) == 10
     assert {source.kind for source in research.sources} >= {
-        "documentation", "paper", "book", "lecture", "article"
+        "documentation", "paper", "book", "lecture", "article", "repository"
     }
 
     audits = [item for item in db.added if isinstance(item, McpToolInvocation)]
     assert [item.tool_name for item in audits] == [
-        "browser_search", "browser_search", "browser_read", "browser_read", "browser_read"
+        "browser_search", "browser_search", "browser_search", "browser_search",
+        "browser_read", "browser_read", "browser_read"
     ]
     assert all("content" not in json.dumps(item.metadata_json).casefold() for item in audits)
     assert all("UNTRUSTED_PAGE_BODY" not in json.dumps(item.metadata_json) for item in audits)
@@ -139,7 +144,7 @@ async def test_direct_browser_fallback_is_bounded_grounded_and_body_free_in_audi
         if isinstance(item, AgentSessionRecord) and item.agent_name == "ResearchFallbackBrowser"
     )
     assert browser_session.status == "completed"
-    assert browser_session.output_payload["read_count"] == 8
+    assert browser_session.output_payload["read_count"] == 10
     persisted_sessions = [item for item in db.added if isinstance(item, AgentSessionRecord)]
     assert all(
         "UNTRUSTED_PAGE_BODY" not in json.dumps(

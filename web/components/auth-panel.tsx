@@ -28,7 +28,7 @@ export function AuthPanel({ onAuthenticated }: { onAuthenticated: (token: string
   }
 
   return <Card className="mx-auto w-full max-w-md">
-    <div className="mb-5 flex items-center gap-3"><span className="rounded-xl bg-accent p-2 text-primary"><KeyRound aria-hidden="true" /></span><div><h2 className="text-xl font-bold">Start your learning path</h2><p className="text-sm text-muted-foreground">Save your outline and pick up where you left off.</p></div></div>
+    <div className="mb-5 flex items-center gap-3"><span className="rounded-xl bg-accent p-2 text-primary"><KeyRound aria-hidden="true" /></span><div><h2 className="text-xl font-bold">Start your learning path</h2><p className="text-sm text-muted-foreground">Save your course and pick up where you left off.</p></div></div>
     <form className="grid gap-4" onSubmit={submit}>
       <div className="grid gap-1.5"><Label htmlFor="email">Email</Label><Input id="email" type="email" autoComplete="email" value={email} onChange={(event) => setEmail(event.target.value)} required /></div>
       <div className="grid gap-1.5"><Label htmlFor="password">Password</Label><Input id="password" type="password" autoComplete={mode === "login" ? "current-password" : "new-password"} minLength={8} value={password} onChange={(event) => setPassword(event.target.value)} required /></div>

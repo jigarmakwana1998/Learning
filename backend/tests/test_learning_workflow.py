@@ -45,7 +45,8 @@ def test_learner_can_generate_study_and_complete_a_quiz_and_assignment() -> None
         run = create_course(client, headers)
 
         assert run["provider"] == "mock"
-        assert run["research"]["sources"]
+        assert run["research"]["sources"] == []
+        assert run["research"]["visited_sources"] == []
         assert run["course"]["title"]
         modules = run["course"]["modules"]
         assert len(modules) == 2
@@ -60,6 +61,14 @@ def test_learner_can_generate_study_and_complete_a_quiz_and_assignment() -> None
             assert lesson["content"]
             assert lesson["practice"]
             assert lesson["estimated_minutes"] >= 5
+
+        trace = client.get(f"/learning-runs/{run['id']}/trace", headers=headers)
+        assert trace.status_code == 200, trace.text
+        trace_sessions = trace.json()["sessions"]
+        assert [session["agent_name"] for session in trace_sessions] == [
+            "Researcher", "Planner", "Examiner"
+        ]
+        assert all(session["transcript"] for session in trace_sessions)
 
         first_lesson = lessons[0]
         progress = client.patch(
@@ -158,6 +167,7 @@ def test_learning_workflow_requires_authentication_and_enforces_run_ownership() 
             headers=other_learner,
             json={"quiz_id": "course-quiz", "answers": [{"question_id": question["id"], "answer": question["choices"][0]}]},
         ).status_code == 404
+        assert client.get(f"{base}/trace", headers=other_learner).status_code == 404
         assert client.post(
             f"{base}/submissions",
             headers=other_learner,

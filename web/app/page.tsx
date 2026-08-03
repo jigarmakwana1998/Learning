@@ -22,14 +22,14 @@ export default function Home() {
   const generation = useMutation({ mutationFn: (intent: TopicIntent) => createLearningRun(intent, token!), onSuccess: setRun });
 
   function signOut() { sessionStorage.removeItem(tokenKey); setToken(undefined); setRun(undefined); }
-  if (!ready) return <main className="grid min-h-screen place-items-center text-muted-foreground" aria-live="polite">Loading Learning Coach…</main>;
+  if (!ready) return <main className="grid min-h-screen place-items-center text-muted-foreground" aria-live="polite">Loading Learning Coach...</main>;
   if (!token) return <PublicLanding onAuthenticated={setToken} />;
   if (userQuery.isError) return <PublicLanding error="Your session has expired. Please sign in again." onAuthenticated={setToken} />;
-  if (!userQuery.data) return <main className="grid min-h-screen place-items-center text-muted-foreground" aria-live="polite">Restoring your session…</main>;
+  if (!userQuery.data) return <main className="grid min-h-screen place-items-center text-muted-foreground" aria-live="polite">Restoring your session...</main>;
 
   return <AppShell user={userQuery.data} onSignOut={signOut}>
     <div className="grid gap-8">
-      {generation.error && <p role="alert" className="rounded-xl border border-red-200 bg-red-50 p-4 text-red-800 dark:border-red-900 dark:bg-red-950 dark:text-red-200">{generation.error instanceof Error ? generation.error.message : "We couldn’t generate that outline. Please try again."}</p>}
+      {generation.error && <p role="alert" className="rounded-xl border border-red-200 bg-red-50 p-4 text-red-800 dark:border-red-900 dark:bg-red-950 dark:text-red-200">{generation.error instanceof Error ? generation.error.message : "We could not generate that course. Please try again."}</p>}
       <IntakeForm onSubmit={generation.mutate} pending={generation.isPending} />
       {run && <CoursePlayer run={run} token={token} />}
     </div>
@@ -38,7 +38,7 @@ export default function Home() {
 
 function PublicLanding({ onAuthenticated, error }: { onAuthenticated: (token: string) => void; error?: string }) {
   return <main className="min-h-screen px-4 py-8 sm:px-6 sm:py-14"><div className="mx-auto grid max-w-6xl items-center gap-10 lg:grid-cols-[1.1fr_0.9fr]">
-    <section><p className="inline-flex items-center gap-2 rounded-full bg-accent px-3 py-1 text-sm font-semibold text-primary"><BookOpenCheck size={16} aria-hidden="true" />Knowledge-graph-grounded learning</p><h1 className="mt-5 max-w-3xl text-4xl font-bold tracking-tight sm:text-6xl">A trustworthy path from curiosity to capability.</h1><p className="mt-5 max-w-2xl text-lg leading-8 text-muted-foreground">Turn a learning goal into a sequenced outline with source context, explicit prerequisites, and clear checks for understanding.</p><div className="mt-8 grid gap-3 sm:grid-cols-3"><Value title="Sequenced" text="Learn foundations before advanced concepts." /><Value title="Evidence-aware" text="Inspect the sources behind each outline." /><Value title="Your pace" text="Set your level, time, and target duration." /></div></section>
+    <section><p className="inline-flex items-center gap-2 rounded-full bg-accent px-3 py-1 text-sm font-semibold text-primary"><BookOpenCheck size={16} aria-hidden="true" />Evidence-first learning</p><h1 className="mt-5 max-w-3xl text-4xl font-bold tracking-tight sm:text-6xl">A trustworthy path from curiosity to capability.</h1><p className="mt-5 max-w-2xl text-lg leading-8 text-muted-foreground">Turn one learning goal into a complete course built from sources the agent actually opened and read. Verify the evidence beside every paragraph.</p><div className="mt-8 grid gap-3 sm:grid-cols-3"><Value title="Research first" text="The agent searches, reads, and filters before writing." /><Value title="Cited lessons" text="Every paragraph links to its exact supporting URLs." /><Value title="Visible process" text="Inspect every visited page, transcript, and tool call." /></div></section>
     <div>{error && <p role="alert" className="mb-4 flex gap-2 rounded-xl border border-amber-300 bg-amber-50 p-3 text-sm text-amber-900"><AlertTriangle className="shrink-0" size={18} aria-hidden="true" />{error}</p>}<AuthPanel onAuthenticated={onAuthenticated} /><p className="mx-auto mt-4 max-w-md text-center text-xs leading-5 text-muted-foreground">Agent-generated content is displayed as text, not executable markup. Always evaluate external sources for your own context.</p></div>
   </div></main>;
 }

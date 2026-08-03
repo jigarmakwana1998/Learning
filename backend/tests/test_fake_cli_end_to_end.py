@@ -48,28 +48,36 @@ def _write_fake_gemini(path: Path) -> None:
 prompt = sys.argv[-1]
 sources = [
     {'title': f'Source {index}', 'url': f'https://docs.example.com/source-{index}',
-     'kind': ['documentation', 'paper', 'book', 'lecture', 'article', 'repository'][index % 6],
-     'rationale': f'Verified evidence for curriculum section {index}'}
-    for index in range(8)
+     'kind': ['documentation', 'paper', 'book', 'lecture', 'slides', 'article', 'repository'][index % 7],
+     'rationale': f'Verified evidence for curriculum section {index}',
+     'key_points': [f'Concrete mechanism supported by source {index}',
+                    f'Worked example or limitation supported by source {index}']}
+    for index in range(12)
 ]
 if '\"agent\": \"Researcher\"' in prompt:
-    print(json.dumps({'type': 'tool_use', 'tool_id': 'read-1', 'tool_name': 'browser_read',
-                      'parameters': {'urls': [item['url'] for item in sources]}}))
-    print(json.dumps({'type': 'tool_result', 'tool_id': 'read-1', 'tool_name': 'browser_read',
-                      'status': 'success',
-                      'output': {'pages': [{'status': 'ok', 'url': item['url']} for item in sources]}}))
+    for batch_index in range(3):
+        batch = sources[batch_index * 4:(batch_index + 1) * 4]
+        tool_id = f'read-{batch_index + 1}'
+        print(json.dumps({'type': 'tool_use', 'tool_id': tool_id, 'tool_name': 'browser_read',
+                          'parameters': {'urls': [item['url'] for item in batch]}}))
+        print(json.dumps({'type': 'tool_result', 'tool_id': tool_id, 'tool_name': 'browser_read',
+                          'status': 'success',
+                          'output': {'pages': [{'status': 'ok', 'url': item['url']} for item in batch]}}))
     print(json.dumps({'type': 'result', 'response': json.dumps({'topic': 'Python functions', 'sources': sources})}))
 elif '\"agent\": \"Planner\"' in prompt:
-    concepts = ('PROVIDER_AUTHORED_CONTENT: A Python function creates a named unit of behavior. Parameters bind each supplied '
-                'argument to a local name, the body transforms those values, and return sends a result back to the caller. '
-                'A worked example traces def double(value): return value * 2 and compares double(3) with its observable result, '
-                '6. The caller owns the returned value, while names created inside the body remain local. A useful validation '
-                'loop predicts an output, runs one representative input, and explains any mismatch before adding a boundary case. ' * 4)
-    validation = ('PROVIDER_VALIDATION_CONTENT: Validation compares a stated expectation with an observed return value. Start '
-                  'with a representative input, add a boundary value, and then test an invalid value where the function contract '
-                  'defines an error. Keep one variable changing at a time so a mismatch points to a specific assumption. Record '
-                  'the call, expected result, actual result, and explanation. This evidence distinguishes a real behavioral check '
-                  'from a plausible-looking output and makes later revisions deliberate. ' * 5)
+    def paragraphs(label, first_source):
+        items = []
+        for paragraph_index in range(6):
+            sentences = []
+            for detail_index in range(7):
+                sentences.append(
+                    f'{label} paragraph {paragraph_index}, detail {detail_index}, explains a distinct function mechanism with '
+                    f'a concrete input, an observable output, a prediction, a boundary condition, and a validation decision '
+                    f'that helps the learner revise a precise mental model rather than memorize generic advice.'
+                )
+            items.append({'text': ' '.join(sentences),
+                          'source_urls': [sources[first_source]['url'], sources[first_source + 1]['url']]})
+        return items
     curriculum = [{'week': 1, 'title': 'Function foundations',
                    'outcomes': ['Define and call a function', 'Validate a result'],
                    'source_urls': [sources[0]['url'], sources[1]['url']],
@@ -78,14 +86,14 @@ elif '\"agent\": \"Planner\"' in prompt:
                    'lessons': [
                      {'id': 'provider-functions-concepts', 'title': 'Function inputs and outputs',
                       'objective': 'Explain how parameters bind inputs and return values expose outputs.',
-                      'content': concepts,
+                      'paragraphs': paragraphs('PROVIDER_AUTHORED_CONTENT', 0),
                       'practice': 'Implement double and three related functions, then record inputs, predicted outputs, and actual outputs.',
-                      'estimated_minutes': 60, 'source_urls': [sources[0]['url']]},
+                      'estimated_minutes': 60, 'source_urls': [sources[0]['url'], sources[1]['url']]},
                      {'id': 'provider-functions-validation', 'title': 'Validate function behavior',
                       'objective': 'Use representative and boundary examples to validate a function result.',
-                      'content': validation,
+                      'paragraphs': paragraphs('PROVIDER_VALIDATION_CONTENT', 1),
                       'practice': 'Write three executable checks for one function and explain what each check demonstrates about its contract.',
-                      'estimated_minutes': 60, 'source_urls': [sources[1]['url']]}
+                      'estimated_minutes': 60, 'source_urls': [sources[1]['url'], sources[2]['url']]}
                    ]}]
     print(json.dumps({'response': json.dumps({'curriculum': curriculum})}))
 else:
@@ -136,10 +144,17 @@ def test_fake_browser_and_gemini_executables_generate_complete_course(tmp_path, 
             )
             assert response.status_code == 200, response.text
             course = response.json()
-            assert len(course["research"]["sources"]) == 8
+            assert len(course["research"]["sources"]) == 12
+            assert len(course["research"]["visited_sources"]) == 12
             assert course["course"]["modules"][0]["lessons"]
             assert course["course"]["modules"][0]["lessons"][0]["content"].startswith(
                 "PROVIDER_AUTHORED_CONTENT"
+            )
+            assert len(course["course"]["modules"][0]["lessons"][0]["paragraphs"]) == 6
+            assert all(
+                paragraph["source_urls"]
+                for lesson in course["course"]["modules"][0]["lessons"]
+                for paragraph in lesson["paragraphs"]
             )
             verified_urls = {source["url"] for source in course["research"]["sources"]}
             assert set(course["course"]["modules"][0]["source_urls"]) <= verified_urls
@@ -159,7 +174,22 @@ def test_fake_browser_and_gemini_executables_generate_complete_course(tmp_path, 
             assert saved.status_code == 200, saved.text
             saved_course = saved.json()
             assert saved_course["course"]["modules"][0]["lessons"] == course["course"]["modules"][0]["lessons"]
-            assert len(saved_course["research"]["sources"]) == 8
+            assert len(saved_course["research"]["sources"]) == 12
+
+            trace = client.get(f"/learning-runs/{course['id']}/trace", headers=learner)
+            assert trace.status_code == 200, trace.text
+            trace_body = trace.json()
+            assert [session["agent_name"] for session in trace_body["sessions"]] == [
+                "Researcher", "Planner"
+            ]
+            assert all(session["transcript"] for session in trace_body["sessions"])
+            researcher_trace = trace_body["sessions"][0]
+            assert len(researcher_trace["tool_invocations"]) == 3
+            assert {
+                page["url"]
+                for tool in researcher_trace["tool_invocations"]
+                for page in tool["metadata"]["page_results"]
+            } == verified_urls
         finally:
             reset = client.put(
                 "/analytics/settings/agent-provider", headers=admin, json={"provider": "mock"}

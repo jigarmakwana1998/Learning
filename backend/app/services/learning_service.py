@@ -1,4 +1,7 @@
 import ipaddress
+import json
+import re
+from collections import Counter
 from datetime import datetime, timezone
 from time import perf_counter
 from urllib.parse import SplitResult, urlsplit, urlunsplit
@@ -12,17 +15,18 @@ from app.agents import (
 )
 from app.browser.gateway import BrowserGateway
 from app.core.config import get_settings
+from app.core.security import encrypt
 from app.harness import AgentHarness
 from app.harness.providers.factory import get_runtime
 from app.mcp.audit import record_tool_invocation
 from app.models.database import (
     AgentRun, AgentSessionRecord, AssignmentSubmissionRecord, LearningRequest,
-    LessonProgressRecord, QuizSubmissionRecord, SystemSetting, User,
+    LessonProgressRecord, QuizSubmissionRecord, SystemSetting, TranscriptEntryRecord, User,
 )
 from app.schemas.learning import (
     Assessment, Assignment, AssignmentSubmissionResponse, Course, CurriculumModule,
     LearningGoal, LearningProgressResponse, LearningRun, LearningRunRequest, Lesson,
-    QuizQuestionFeedback, QuizSubmissionResponse, ResearchBrief, Source,
+    QuizQuestionFeedback, QuizSubmissionResponse, ResearchBrief, Source, SourceVisit,
 )
 
 
@@ -111,7 +115,7 @@ class LearningService:
         provider: str,
         goal: LearningGoal,
     ) -> tuple[AgentSessionRecord, ResearchBrief]:
-        """Bounded direct-browser recovery with two plain Gemini decisions."""
+        """Bounded deep-browser recovery with two plain model decisions."""
         gateway = self.browser_gateway_factory()
         audit_session = AgentSessionRecord(
             agent_run_id=run_id,
@@ -126,8 +130,10 @@ class LearningService:
             candidates: list[dict[str, str]] = []
             seen_candidates: set[str] = set()
             queries = (
-                f"{goal.topic} official documentation research paper book",
-                f"{goal.topic} university lecture course explanatory article",
+                f"{goal.topic} original research paper foundational definition",
+                f"{goal.topic} official documentation implementation architecture",
+                f"{goal.topic} textbook chapter university lecture slides pdf",
+                f"{goal.topic} high quality technical blog worked example limitations",
             )
             for query in queries:
                 call_started = perf_counter()
@@ -149,9 +155,9 @@ class LearningService:
                     candidates.append(
                         {"title": str(item.get("title") or "Public source")[:300], "url": normalized}
                     )
-            if len(candidates) < 8:
+            if len(candidates) < 12:
                 raise ValueError(
-                    f"Browser fallback requires at least 8 public candidates; received {len(candidates)}."
+                    f"Browser research requires at least 12 public candidates; received {len(candidates)}."
                 )
 
             selector = ResearchSelectorAgent()
@@ -160,19 +166,17 @@ class LearningService:
                 run_id,
                 provider,
                 selector.name,
-                selector.build_prompt(goal, {"candidates": candidates[:20]}),
+                selector.build_prompt(goal, {"candidates": candidates[:32]}),
             )
             selections = self._validated_fallback_selections(selector_output, candidates)
             selected_urls = [item["url"] for item in selections]
-            remaining_urls = [item["url"] for item in candidates if item["url"] not in set(selected_urls)]
-            ordered_urls = [*selected_urls, *remaining_urls][:12]
+            ordered_urls = selected_urls
             kind_hints = {item["url"]: item["kind"] for item in selections}
 
             pages: list[dict[str, object]] = []
             seen_pages: set[str] = set()
+            visit_ledger: list[SourceVisit] = []
             for offset in range(0, len(ordered_urls), 4):
-                if len(pages) >= 8:
-                    break
                 batch = ordered_urls[offset : offset + 4]
                 call_started = perf_counter()
                 result = await gateway.browser_read(batch)
@@ -180,24 +184,29 @@ class LearningService:
                     db, audit_session.id, "browser_read", result, call_started
                 )
                 for page in result.get("pages", []):
-                    if not isinstance(page, dict) or str(page.get("status", "")).casefold() != "ok":
+                    if not isinstance(page, dict):
+                        continue
+                    requested = self._normalize_evidence_url(page.get("requested_url"))
+                    if str(page.get("status", "")).casefold() != "ok":
+                        if requested:
+                            visit_ledger.append(SourceVisit(url=requested, status="unavailable"))
                         continue
                     normalized = self._normalize_evidence_url(page.get("url"))
-                    content = str(page.get("content") or "")[:4000]
+                    content = str(page.get("content") or "")[:6000]
                     if normalized is None or normalized in seen_pages or not content.strip():
                         continue
                     seen_pages.add(normalized)
+                    title = str(page.get("title") or "Public source")[:500]
+                    visit_ledger.append(SourceVisit(url=normalized, title=title, status="read"))
                     pages.append(
                         {
                             "url": normalized,
-                            "title": str(page.get("title") or "Public source")[:500],
+                            "title": title,
                             "kind_hint": kind_hints.get(normalized),
                             "content": content,
                             "content_is_untrusted": True,
                         }
                     )
-                    if len(pages) == 8:
-                        break
             if len(pages) < 8:
                 raise ValueError(
                     f"Browser fallback requires 8 readable public sources; received {len(pages)}."
@@ -216,6 +225,15 @@ class LearningService:
             research = self._verified_research(
                 AgentResult(synthesis_output, visited_urls=frozenset(seen_pages))
             )
+            selected = {source.url for source in research.sources}
+            research = research.model_copy(
+                update={
+                    "visited_sources": [
+                        visit.model_copy(update={"selected": visit.url in selected})
+                        for visit in visit_ledger
+                    ]
+                }
+            )
             audit_session.status = "completed"
             audit_session.output_payload = {
                 "candidate_count": len(candidates),
@@ -224,6 +242,13 @@ class LearningService:
                 "selector_session_id": selector_session.id,
                 "synthesis_session_id": synthesis_session.id,
             }
+            self._add_transcript_entry(
+                db,
+                audit_session.id,
+                "system",
+                f"Completed four focused searches, selected 12 candidates, and read {len(pages)} public pages. Page bodies are not persisted.",
+                1,
+            )
             return synthesis_session, research
         except Exception:
             audit_session.status = "failed"
@@ -253,12 +278,19 @@ class LearningService:
         await db.flush()
         started = perf_counter()
         try:
+            redacted_input = (
+                "Selected public source candidates from normalized URLs."
+                if role == "ResearchSelector"
+                else "Synthesized browser-read evidence. Page bodies were supplied in memory and are intentionally omitted from the durable transcript."
+            )
+            self._add_transcript_entry(db, session.id, "user", redacted_input, 1)
             execution = await get_runtime(provider, role).execute(prompt)
             payload = execution.payload if hasattr(execution, "payload") else execution
             if not isinstance(payload, dict):
                 raise ValueError(f"{role} must return a JSON object.")
             session.output_payload = payload
             session.status = "completed"
+            self._add_transcript_entry(db, session.id, "assistant", json.dumps(payload), 2)
             return session, payload
         except Exception as error:
             session.status = "failed"
@@ -276,27 +308,47 @@ class LearningService:
         candidates: list[dict[str, str]],
     ) -> list[dict[str, str]]:
         selections = output.get("selections") if isinstance(output, dict) else None
-        if not isinstance(selections, list) or len(selections) != 8:
-            raise ValueError("ResearchSelector must choose exactly 8 candidates.")
+        if not isinstance(selections, list) or len(selections) != 12:
+            raise ValueError("ResearchSelector must choose exactly 12 candidates.")
         allowed_urls = {item["url"] for item in candidates}
-        allowed_kinds = {"documentation", "paper", "book", "lecture", "article", "repository"}
+        allowed_kinds = {"documentation", "paper", "book", "lecture", "slides", "article", "repository"}
         validated: list[dict[str, str]] = []
         seen: set[str] = set()
         for item in selections:
             if not isinstance(item, dict):
                 raise ValueError("ResearchSelector returned an invalid selection.")
-            normalized = cls._normalize_evidence_url(item.get("url"))
+            normalized = cls._normalize_evidence_url(item.get("url") or item.get("requested_url"))
             kind = item.get("kind")
             if normalized not in allowed_urls or normalized in seen or kind not in allowed_kinds:
                 raise ValueError("ResearchSelector must use unique candidate URLs and supported kinds.")
             seen.add(normalized)
             validated.append({"url": normalized, "kind": kind})
-        required = {"documentation", "paper", "book", "lecture", "article"}
-        if missing := required - {item["kind"] for item in validated}:
+        kinds = {item["kind"] for item in validated}
+        required = {"documentation", "paper", "book", "article", "repository"}
+        if missing := required - kinds:
             raise ValueError(
                 "ResearchSelector source mix is incomplete; missing: " + ", ".join(sorted(missing))
             )
+        if not kinds.intersection({"lecture", "slides"}):
+            raise ValueError("ResearchSelector source mix must include a lecture or slide deck.")
         return validated
+
+    @staticmethod
+    def _add_transcript_entry(
+        db: AsyncSession,
+        session_id: str,
+        role: str,
+        content: str,
+        sequence: int,
+    ) -> None:
+        db.add(
+            TranscriptEntryRecord(
+                session_id=session_id,
+                sequence=sequence,
+                role=role,
+                encrypted_content=encrypt(content),
+            )
+        )
 
     @classmethod
     async def _audit_fallback_browser_call(
@@ -310,15 +362,25 @@ class LearningService:
         items = result.get("results") if tool_name == "browser_search" else result.get("pages")
         items = items if isinstance(items, list) else []
         urls: list[str] = []
+        page_results: list[dict[str, str]] = []
         success_count = 0
         for item in items:
             if not isinstance(item, dict):
                 continue
             if tool_name == "browser_search" or str(item.get("status", "")).casefold() == "ok":
                 success_count += 1
-            normalized = cls._normalize_evidence_url(item.get("url"))
+            normalized = cls._normalize_evidence_url(item.get("url") or item.get("requested_url"))
             if normalized and normalized not in urls:
                 urls.append(normalized)
+            if tool_name == "browser_read" and normalized:
+                page_results.append(
+                    {
+                        "url": normalized,
+                        "status": "read"
+                        if str(item.get("status", "")).casefold() == "ok"
+                        else "unavailable",
+                    }
+                )
         domains = sorted({urlsplit(url).hostname for url in urls if urlsplit(url).hostname})
         status = "success" if result.get("status") == "ok" else "failed"
         error_payload = result.get("error") if isinstance(result.get("error"), dict) else {}
@@ -332,6 +394,7 @@ class LearningService:
                 "domains": domains[:20],
                 "result_count": len(items),
                 "success_count": success_count,
+                "page_results": page_results,
                 "fallback": True,
             },
             str(error_payload.get("code") or "Browser operation unavailable") if status == "failed" else None,
@@ -359,7 +422,10 @@ class LearningService:
             ):
                 continue
             seen.add(normalized)
-            verified.append(source.model_copy(update={"url": normalized}))
+            key_points = [point.strip() for point in source.key_points if point.strip()]
+            if len(key_points) < 2 or any(len(point) < 20 for point in key_points):
+                continue
+            verified.append(source.model_copy(update={"url": normalized, "key_points": key_points}))
             if len(verified) == 12:
                 break
         if len(verified) < 8:
@@ -367,14 +433,49 @@ class LearningService:
                 "Research requires at least 8 unique browser-verified sources; "
                 f"received {len(verified)}. Run browser_read on every source before citing it."
             )
-        required_kinds = {"documentation", "paper", "book", "lecture", "article"}
-        missing_kinds = required_kinds - {source.kind for source in verified}
+        kinds = {source.kind for source in verified}
+        required_kinds = {"documentation", "paper", "book", "article", "repository"}
+        missing_kinds = required_kinds - kinds
         if missing_kinds:
             raise ValueError(
-                "Research must cover documentation, paper, book, lecture, and article sources; "
+                "Research must cover documentation, paper, book, article, and repository sources; "
                 f"missing: {', '.join(sorted(missing_kinds))}."
             )
-        return research.model_copy(update={"sources": verified})
+        if not kinds.intersection({"lecture", "slides"}):
+            raise ValueError("Research must include a browser-verified lecture or slide deck.")
+        selected = {source.url for source in verified}
+        discovered: list[str] = []
+        unavailable: list[str] = []
+        for event in getattr(research_output, "tool_events", ()):
+            metadata = event.metadata if isinstance(event.metadata, dict) else {}
+            if "browser_search" in event.tool_name:
+                for url in metadata.get("urls", []):
+                    normalized = cls._normalize_evidence_url(url)
+                    if normalized and normalized not in discovered:
+                        discovered.append(normalized)
+            if "browser_read" in event.tool_name:
+                for page in metadata.get("page_results", []):
+                    if not isinstance(page, dict) or page.get("status") != "unavailable":
+                        continue
+                    normalized = cls._normalize_evidence_url(page.get("url"))
+                    if normalized and normalized not in unavailable:
+                        unavailable.append(normalized)
+        ledger = [
+            SourceVisit(url=url, status="read", selected=url in selected)
+            for url in sorted(visited_urls)
+        ]
+        read_urls = {entry.url for entry in ledger}
+        ledger.extend(
+            SourceVisit(url=url, status="discovered", selected=False)
+            for url in discovered
+            if url not in read_urls and url not in unavailable
+        )
+        ledger.extend(
+            SourceVisit(url=url, status="unavailable", selected=False)
+            for url in unavailable
+            if url not in read_urls
+        )
+        return research.model_copy(update={"sources": verified, "visited_sources": ledger})
 
     @classmethod
     def _provider_curriculum(
@@ -425,12 +526,38 @@ class LearningService:
                     raise ValueError(f"Planner lesson id must be unique: {lesson.id}")
                 seen_lesson_ids.add(lesson.id)
                 cls._validate_lesson_content(lesson, module.week)
+                paragraphs = []
+                paragraph_urls: list[str] = []
+                for index, paragraph in enumerate(lesson.paragraphs, start=1):
+                    urls = cls._grounded_source_urls(
+                        paragraph.source_urls,
+                        verified_urls,
+                        f"lesson {lesson.id} paragraph {index}",
+                    )
+                    for url in urls:
+                        if url not in paragraph_urls:
+                            paragraph_urls.append(url)
+                    paragraphs.append(paragraph.model_copy(update={"source_urls": urls}))
+                if len(paragraph_urls) < 2:
+                    raise ValueError(
+                        f"Planner lesson {lesson.id} must synthesize at least two verified sources."
+                    )
                 lesson_urls = cls._grounded_source_urls(
-                    lesson.source_urls or module_urls,
+                    lesson.source_urls or paragraph_urls,
                     verified_urls,
                     f"lesson {lesson.id}",
                 )
-                lessons.append(lesson.model_copy(update={"source_urls": lesson_urls}))
+                if not set(paragraph_urls).issubset(set(lesson_urls)):
+                    lesson_urls = [*lesson_urls, *(url for url in paragraph_urls if url not in lesson_urls)]
+                lessons.append(
+                    lesson.model_copy(
+                        update={
+                            "content": "\n\n".join(paragraph.text.strip() for paragraph in paragraphs),
+                            "paragraphs": paragraphs,
+                            "source_urls": lesson_urls,
+                        }
+                    )
+                )
             if sum(lesson.estimated_minutes for lesson in lessons) > goal.hours_per_week * 60:
                 raise ValueError(
                     f"Planner module week {module.week} lesson time exceeds the learner's weekly-hour budget."
@@ -474,7 +601,6 @@ class LearningService:
         fields = {
             "title": (lesson.title, 3),
             "objective": (lesson.objective, 12),
-            "content": (lesson.content, 1200),
             "practice": (lesson.practice, 20),
         }
         for name, (value, minimum) in fields.items():
@@ -482,6 +608,31 @@ class LearningService:
                 raise ValueError(
                     f"Planner lesson {lesson.id or '<unknown>'} in week {week} needs complete {name}."
                 )
+        if not 4 <= len(lesson.paragraphs) <= 7:
+            raise ValueError(
+                f"Planner lesson {lesson.id or '<unknown>'} in week {week} must contain 4-7 cited paragraphs."
+            )
+        texts = [paragraph.text.strip() for paragraph in lesson.paragraphs]
+        word_count = sum(len(text.split()) for text in texts)
+        if not 1200 <= word_count <= 1800:
+            raise ValueError(
+                f"Planner lesson {lesson.id or '<unknown>'} in week {week} must contain 1200-1800 substantive words."
+            )
+        normalized = [re.sub(r"\s+", " ", text.casefold()) for text in texts]
+        if len(set(normalized)) != len(normalized):
+            raise ValueError(f"Planner lesson {lesson.id} repeats a paragraph.")
+        all_sentences: list[str] = []
+        for text in texts:
+            sentences = [
+                re.sub(r"\s+", " ", sentence.strip().casefold())
+                for sentence in re.split(r"(?<=[.!?])\s+", text)
+                if len(sentence.split()) >= 5
+            ]
+            if len(sentences) >= 3 and len(set(sentences)) / len(sentences) < 0.75:
+                raise ValueError(f"Planner lesson {lesson.id} repeats sentences instead of teaching the topic.")
+            all_sentences.extend(sentences)
+        if any(count > 2 for count in Counter(all_sentences).values()):
+            raise ValueError(f"Planner lesson {lesson.id} repeats sentences across paragraphs.")
 
     @staticmethod
     def _normalize_evidence_url(url: object) -> str | None:
@@ -537,24 +688,18 @@ class LearningService:
         return hostname in {"google.com", "www.google.com"} and parsed.path.casefold().startswith("/search")
 
     def _mock_run(self, goal: LearningGoal, provider: str, sessions: dict[str, str]) -> LearningRun:
-        source = Source(
-            title=f"Official {goal.topic} documentation",
-            url="https://www.google.com/search?q=" + goal.topic.replace(" ", "+") + "+official+documentation",
-            kind="documentation",
-            rationale="Start with the official reference, then validate examples against its current version.",
-        )
         curriculum = self._enrich_curriculum(goal, [
             CurriculumModule(
                 week=week,
                 title=self._module_title(goal.topic, week),
                 outcomes=self._outcomes(goal.topic, goal.level, week),
-                source_urls=[source.url],
+                source_urls=[],
             )
             for week in range(1, goal.weeks + 1)
         ])
         assessment = self._build_assessment(goal)
         return LearningRun(
-            id="", provider=provider, research=ResearchBrief(topic=goal.topic, sources=[source]),
+            id="", provider=provider, research=ResearchBrief(topic=goal.topic, sources=[]),
             curriculum=curriculum, course=Course(title=f"{goal.topic} learning path", modules=curriculum),
             assessment=assessment, sessions=sessions,
         )

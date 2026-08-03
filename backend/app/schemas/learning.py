@@ -24,13 +24,22 @@ class AgentProviderSetting(BaseModel):
 class Source(BaseModel):
     title: str = Field(min_length=2, max_length=500)
     url: str
-    kind: Literal["documentation", "paper", "book", "lecture", "article", "repository"]
+    kind: Literal["documentation", "paper", "book", "lecture", "slides", "article", "repository"]
     rationale: str = Field(min_length=8, max_length=2000)
+    key_points: list[str] = Field(default_factory=list, max_length=8)
+
+
+class SourceVisit(BaseModel):
+    url: str
+    title: str | None = Field(default=None, max_length=500)
+    status: Literal["discovered", "read", "unavailable"]
+    selected: bool = False
 
 
 class ResearchBrief(BaseModel):
     topic: str
     sources: list[Source]
+    visited_sources: list[SourceVisit] = Field(default_factory=list)
 
 
 class CurriculumModule(BaseModel):
@@ -43,11 +52,17 @@ class CurriculumModule(BaseModel):
     lessons: list["Lesson"] = Field(default_factory=list)
 
 
+class LessonParagraph(BaseModel):
+    text: str = Field(min_length=80, max_length=3000)
+    source_urls: list[str] = Field(min_length=1, max_length=3)
+
+
 class Lesson(BaseModel):
     id: str
     title: str
     objective: str
-    content: str
+    content: str = ""
+    paragraphs: list[LessonParagraph] = Field(default_factory=list)
     practice: str
     estimated_minutes: int = Field(ge=5, le=240)
     # Optional for stored legacy/mock courses. Real provider output is validated

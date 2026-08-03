@@ -19,8 +19,9 @@ class Settings(BaseModel):
     cors_origins: list[str] = [origin.strip() for origin in os.getenv("CORS_ORIGINS", "http://localhost:8081,http://localhost:19006").split(",") if origin.strip()]
     admin_email: str = os.getenv("ADMIN_EMAIL", "admin@example.com")
     admin_password: str = os.getenv("ADMIN_PASSWORD", "change-me-now")
-    supabase_url: str | None = os.getenv("SUPABASE_URL")
-    supabase_publishable_key: str | None = os.getenv("SUPABASE_PUBLISHABLE_KEY")
+    local_auth: bool = os.getenv("LOCAL_AUTH", "false").casefold() == "true"
+    supabase_url: str | None = None if local_auth else os.getenv("SUPABASE_URL")
+    supabase_publishable_key: str | None = None if local_auth else os.getenv("SUPABASE_PUBLISHABLE_KEY")
 
 
 @lru_cache
