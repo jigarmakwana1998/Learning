@@ -1,5 +1,3 @@
-from collections.abc import Callable
-
 import jwt
 import httpx
 from fastapi import Depends, HTTPException, status

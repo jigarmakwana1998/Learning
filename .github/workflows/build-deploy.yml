@@ -1,0 +1,72 @@
+name: Build and deploy
+
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    outputs:
+      image: ${{ steps.image.outputs.image }}
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - name: Validate deployment Compose configuration
+        run: IMAGE=example.invalid/learning-coach@sha256:$(printf '0%.0s' {1..64}) docker compose -f backend/docker-compose.deploy.yml config --quiet
+      - id: image
+        name: Build, generate SBOM, and push immutable image
+        env:
+          REGISTRY: ${{ vars.CONTAINER_REGISTRY }}
+          REGISTRY_USERNAME: ${{ secrets.REGISTRY_USERNAME }}
+          REGISTRY_PASSWORD: ${{ secrets.REGISTRY_PASSWORD }}
+        run: |
+          test -n "$REGISTRY" && test -n "$REGISTRY_USERNAME" && test -n "$REGISTRY_PASSWORD"
+          image="$REGISTRY/learning-coach-api:${GITHUB_SHA}"
+          printf '%s' "$REGISTRY_PASSWORD" | docker login "$REGISTRY" --username "$REGISTRY_USERNAME" --password-stdin
+          docker build --provenance=true --file backend/Dockerfile --tag "$image" .
+          docker push "$image"
+          digest=$(docker inspect --format='{{index .RepoDigests 0}}' "$image")
+          docker run --rm -v /var/run/docker.sock:/var/run/docker.sock anchore/syft:v1.18.1 "$digest" -o spdx-json > sbom.spdx.json
+          echo "image=$digest" >> "$GITHUB_OUTPUT"
+      - uses: actions/upload-artifact@65c4c4a1ddee5b72f698fdd19549f0f0fb45cf08 # v4.6.0
+        with: { name: sbom, path: sbom.spdx.json }
+  staging:
+    if: github.ref == 'refs/heads/main'
+    needs: build
+    runs-on: ubuntu-24.04
+    environment: staging
+    steps:
+      - name: Deploy the pinned digest over SSH
+        env:
+          DEPLOY_HOST: ${{ secrets.STAGING_DEPLOY_HOST }}
+          DEPLOY_USER: ${{ secrets.STAGING_DEPLOY_USER }}
+          DEPLOY_SSH_KEY: ${{ secrets.STAGING_DEPLOY_SSH_KEY }}
+          IMAGE: ${{ needs.build.outputs.image }}
+        run: |
+          test -n "$DEPLOY_HOST" && test -n "$DEPLOY_USER" && test -n "$DEPLOY_SSH_KEY" && test -n "$IMAGE"
+          install -m 700 -d ~/.ssh; printf '%s\n' "$DEPLOY_SSH_KEY" > ~/.ssh/id_ed25519; chmod 600 ~/.ssh/id_ed25519
+          ssh-keyscan -H "$DEPLOY_HOST" >> ~/.ssh/known_hosts
+          # shellcheck disable=SC2029
+          ssh "$DEPLOY_USER@$DEPLOY_HOST" "cd /opt/learning-coach/backend && IMAGE='$IMAGE' docker compose -f docker-compose.deploy.yml pull && IMAGE='$IMAGE' docker compose -f docker-compose.deploy.yml up -d --wait"
+  production:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: build
+    runs-on: ubuntu-24.04
+    environment: production
+    steps:
+      - name: Deploy approved release
+        env:
+          DEPLOY_HOST: ${{ secrets.PRODUCTION_DEPLOY_HOST }}
+          DEPLOY_USER: ${{ secrets.PRODUCTION_DEPLOY_USER }}
+          DEPLOY_SSH_KEY: ${{ secrets.PRODUCTION_DEPLOY_SSH_KEY }}
+          IMAGE: ${{ needs.build.outputs.image }}
+        run: |
+          test -n "$DEPLOY_HOST" && test -n "$DEPLOY_USER" && test -n "$DEPLOY_SSH_KEY" && test -n "$IMAGE"
+          install -m 700 -d ~/.ssh; printf '%s\n' "$DEPLOY_SSH_KEY" > ~/.ssh/id_ed25519; chmod 600 ~/.ssh/id_ed25519
+          ssh-keyscan -H "$DEPLOY_HOST" >> ~/.ssh/known_hosts
+          # shellcheck disable=SC2029
+          ssh "$DEPLOY_USER@$DEPLOY_HOST" "cd /opt/learning-coach/backend && IMAGE='$IMAGE' docker compose -f docker-compose.deploy.yml pull && IMAGE='$IMAGE' docker compose -f docker-compose.deploy.yml up -d --wait"

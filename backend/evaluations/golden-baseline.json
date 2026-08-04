@@ -1,0 +1,9 @@
+{
+  "fixture_count": 3,
+  "required_fixture_fields": ["name", "topic", "level", "hours_per_week", "weeks"],
+  "required_agent_output_terms": {
+    "researcher": ["JSON", "sources", "url"],
+    "planner": ["JSON"],
+    "examiner": ["JSON"]
+  }
+}
