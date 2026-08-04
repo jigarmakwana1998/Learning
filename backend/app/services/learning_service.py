@@ -92,8 +92,8 @@ class LearningService:
         if week == 1:
             return [f"Explain the essential vocabulary of {topic}", f"Set up a repeatable {topic} study and practice environment"]
         if week == 2:
-            return [f"Apply a core {topic} workflow to a small example", f"Check work against documentation and expected outcomes"]
-        return [f"Complete and explain a {level}-level {topic} practice task", f"Identify one improvement after reviewing evidence from the task"]
+            return [f"Apply a core {topic} workflow to a small example", "Check work against documentation and expected outcomes"]
+        return [f"Complete and explain a {level}-level {topic} practice task", "Identify one improvement after reviewing evidence from the task"]
 
     def _enrich_curriculum(self, goal: LearningGoal, curriculum: list[CurriculumModule]) -> list[CurriculumModule]:
         """Make every generated outline usable in the study player, including CLI-agent output."""

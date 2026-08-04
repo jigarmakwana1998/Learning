@@ -227,7 +227,7 @@ class BrowserGateway:
     async def _parse_results(self, text: str, base_url: str, limit: int) -> list[dict[str, str]]:
         candidates: list[tuple[str, str]] = list(_MARKDOWN_LINK.findall(text))
         candidates.extend(
-            ((match.group("title") or "Search result", match.group("url")) for match in _SNAPSHOT_LINK.finditer(text))
+            (match.group("title") or "Search result", match.group("url")) for match in _SNAPSHOT_LINK.finditer(text)
         )
         candidates.extend((match.group("title"), match.group("url")) for match in _RSS_ITEM.finditer(text))
         results: list[dict[str, str]] = []

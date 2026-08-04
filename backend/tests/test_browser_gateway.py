@@ -156,8 +156,6 @@ def test_only_two_research_tools_are_exposed():
 
 @pytest.mark.asyncio
 async def test_stdio_mcp_server_exposes_only_safe_browser_tools():
-    from app.browser.server import mcp
-
     assert {tool.name for tool in await mcp.list_tools()} == {"browser_search", "browser_read"}
     assert {tool.name for tool in mcp._tool_manager.list_tools()} == {"browser_search", "browser_read"}
     for tool in await mcp.list_tools():
