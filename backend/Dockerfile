@@ -29,7 +29,9 @@ COPY --from=browser-tools /usr/local/lib/node_modules /usr/local/lib/node_module
 COPY --from=browser-tools /tools/node_modules /opt/learning-tools/node_modules
 
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends ca-certificates libstdc++6 \
+    && apt-get install -y --no-install-recommends \
+        ca-certificates=20230311+deb12u1 \
+        libstdc++6=12.2.0-14+deb12u1 \
     && ln -s /usr/local/lib/node_modules/npm/bin/npm-cli.js /usr/local/bin/npm \
     && ln -s /usr/local/lib/node_modules/npm/bin/npx-cli.js /usr/local/bin/npx \
     && mkdir -p /opt/agent-browser-cache \
