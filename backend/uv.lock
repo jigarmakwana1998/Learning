@@ -611,7 +611,7 @@ requires-dist = [
 [package.metadata.requires-dev]
 dev = [
     { name = "pytest", specifier = ">=8,<10" },
-    { name = "pytest-asyncio", specifier = ">=0.25,<1" },
+    { name = "pytest-asyncio", specifier = ">=0.25,<2" },
     { name = "pytest-benchmark", specifier = ">=5,<6" },
 ]
 
