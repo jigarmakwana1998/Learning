@@ -1,0 +1,15 @@
+{
+  "default": "deny",
+  "allow": [
+    "navigate",
+    "snapshot",
+    "scroll",
+    "wait",
+    "get",
+    "url",
+    "title",
+    "text",
+    "gettext",
+    "close"
+  ]
+}

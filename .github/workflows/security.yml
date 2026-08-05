@@ -37,6 +37,16 @@ jobs:
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Validate browser-enabled Compose configuration
+        env:
+          POSTGRES_PASSWORD: ci-postgres-password
+          NEO4J_PASSWORD: ci-neo4j-password
+          MINIO_ROOT_USER: ci-minio-user
+          MINIO_ROOT_PASSWORD: ci-minio-password
+          GRAFANA_ADMIN_PASSWORD: ci-grafana-password
+        run: |
+          cp backend/.env.example backend/.env
+          docker compose -f compose.yml config --quiet
       - name: Enforce a digest-pinned non-root Dockerfile
         run: |
           docker run --rm -i hadolint/hadolint:v2.12.0 < backend/Dockerfile

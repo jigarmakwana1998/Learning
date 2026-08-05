@@ -25,6 +25,25 @@ workers must use the insert-only `agent_writer` role, never the migration owner.
 
 ## Start the backend
 
+Browser-backed Gemini research requires Node.js 24 or newer. Install the pinned
+Gemini CLI, agent-browser, and Chrome for Testing from the repository root:
+
+```powershell
+.\scripts\setup-browser-tools.ps1
+```
+
+On Linux or macOS:
+
+```bash
+sh ./scripts/setup-browser-tools.sh
+```
+
+The scripts use `npm ci`, so the CLI versions come from the committed lockfile.
+They install Chrome for Testing and run agent-browser's offline diagnostics. The
+Docker image performs the same setup automatically. Authenticate Gemini by
+setting `GEMINI_API_KEY` in `backend/.env`; browser installation itself does not
+make a paid model request.
+
 ```bash
 cd backend
 uv sync --group dev

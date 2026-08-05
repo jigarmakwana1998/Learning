@@ -36,24 +36,32 @@ services:
     env_file: ./backend/.env
     environment:
       DATABASE_URL: postgresql+asyncpg://learning_coach:${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}@postgres:5432/learning_coach
+      AGENT_BROWSER_CONTENT_BOUNDARIES: "1"
+      AGENT_BROWSER_MAX_OUTPUT: "6000"
     depends_on:
       postgres:
         condition: service_healthy
     read_only: true
     tmpfs:
-      - /tmp
+      - /tmp:uid=10001,gid=10001,mode=1777,size=256m
+      - /dev/shm:uid=10001,gid=10001,mode=1777,size=512m
+      - /home/app/.cache:uid=10001,gid=10001,mode=0700,size=1g
+      - /home/app/.gemini:uid=10001,gid=10001,mode=0700,size=64m
+      - /home/app/.agent-browser:uid=10001,gid=10001,mode=0700,size=64m
     cap_drop: [ALL]
     security_opt: [no-new-privileges:true]
-    pids_limit: 256
-    mem_limit: 512m
-    cpus: "1.0"
+    pids_limit: 512
+    mem_limit: 2g
+    cpus: "2.0"
     healthcheck:
-      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health')"]
+      test: ["CMD-SHELL", "command -v gemini >/dev/null && command -v agent-browser >/dev/null && gemini --version >/dev/null && agent-browser --version >/dev/null && python -c \"import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health')\""]
       interval: 15s
       timeout: 5s
       retries: 5
       start_period: 30s
-    networks: [internal]
+    # edge provides outbound Internet access for Gemini and public browsing;
+    # databases remain isolated on internal and publish no host ports.
+    networks: [edge, internal]
     restart: unless-stopped
 
   web:
