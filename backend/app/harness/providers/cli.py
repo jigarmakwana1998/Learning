@@ -6,11 +6,14 @@ import shlex
 import shutil
 import signal
 import subprocess
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
 from typing import Any
 from urllib.parse import urlsplit, urlunsplit
+
+from app.core.config import get_settings
 
 
 @dataclass(frozen=True)
@@ -62,11 +65,16 @@ class CliRuntime:
         self.timeout_seconds = timeout_seconds
         self.working_directory = self._gemini_project_directory() if name == "gemini-cli" else None
 
-    async def execute(self, prompt: str) -> ProviderExecution:
+    async def execute(
+        self,
+        prompt: str,
+        on_event: Callable[[dict], Awaitable[None]] | None = None,
+        gateway_api_key: str | None = None,
+    ) -> ProviderExecution:
         attempts = 2 if self.name == "gemini-cli" else 1
         for attempt in range(attempts):
             try:
-                return await self._execute_once(prompt)
+                return await self._execute_once(prompt, on_event, gateway_api_key)
             except _RateLimited as error:
                 if attempt + 1 >= attempts:
                     raise RuntimeError(
@@ -75,9 +83,14 @@ class CliRuntime:
                 await asyncio.sleep(error.retry_after)
         raise AssertionError("CLI retry loop exited unexpectedly")
 
-    async def _execute_once(self, prompt: str) -> ProviderExecution:
+    async def _execute_once(
+        self,
+        prompt: str,
+        on_event: Callable[[dict], Awaitable[None]] | None,
+        gateway_api_key: str | None,
+    ) -> ProviderExecution:
         command = [*self.command]
-        environment = self._environment()
+        environment = self._environment(gateway_api_key)
         # On Windows, npm exposes Gemini through a .cmd shim. Resolve it before
         # spawning so asyncio does not try to execute PowerShell's .ps1 wrapper.
         executable = shutil.which(command[0], path=environment.get("PATH") or environment.get("Path"))
@@ -134,6 +147,9 @@ class CliRuntime:
                 raise _RateLimited(retry_after)
             # CLI diagnostics can contain account, project, prompt, or page details.
             raise RuntimeError(f"{self.name} failed. Check its local authentication and configuration.")
+        if on_event:
+            for event in self._event_objects(stdout_text):
+                await on_event(event)
         try:
             return self._parse_stream_response(stdout_text) if self.stream_json else ProviderExecution(
                 payload=self._parse_response(stdout_text)
@@ -190,7 +206,7 @@ class CliRuntime:
                 except asyncio.CancelledError:
                     pass
 
-    def _environment(self) -> dict[str, str]:
+    def _environment(self, gateway_api_key: str | None = None) -> dict[str, str]:
         environment = os.environ.copy()
         if self.name == "gemini-cli":
             # Support the lowercase names commonly used in local .env files while
@@ -209,7 +225,47 @@ class CliRuntime:
             # Gemini CLI refuses unattended prompts in an untrusted workspace.
             # This flag is scoped to the child process, never persisted in .env.
             environment.setdefault("GEMINI_CLI_TRUST_WORKSPACE", "true")
+        settings = get_settings()
+        gateway_key = gateway_api_key or settings.litellm_api_key
+        if not gateway_key:
+            raise RuntimeError("LITELLM_API_KEY is required for every live agent harness")
+        base_url = settings.litellm_base_url.rstrip("/")
+        environment.update({
+            "LITELLM_API_KEY": gateway_key,
+            "OPENAI_API_KEY": gateway_key,
+            "OPENAI_BASE_URL": f"{base_url}/v1",
+            "GOOGLE_GEMINI_BASE_URL": settings.litellm_gemini_base_url.rstrip("/"),
+            "GEMINI_API_KEY": gateway_key,
+            "ANTIGRAVITY_BASE_URL": base_url,
+            "ANTIGRAVITY_API_KEY": gateway_key,
+        })
         return environment
+
+    def _gateway_environment(self, api_key: str | None = None) -> dict[str, str]:
+        """Expose the exact child environment for diagnostics and contract tests."""
+        return self._environment(api_key)
+
+    @staticmethod
+    def _event_objects(output: str) -> list[dict[str, Any]]:
+        try:
+            parsed = json.loads(output)
+        except json.JSONDecodeError:
+            events: list[dict[str, Any]] = []
+            for line in output.splitlines():
+                try:
+                    parsed_line = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                if isinstance(parsed_line, dict):
+                    events.append(parsed_line)
+            return events
+        return [parsed] if isinstance(parsed, dict) else []
+
+    def _parse_events(self, output: str) -> list[dict[str, Any]]:
+        return self._event_objects(output)
+
+    def _extract_result(self, events: list[dict[str, Any]]) -> dict:
+        return self._parse_response("\n".join(json.dumps(event) for event in events))
 
     @staticmethod
     async def _terminate_process_tree(process: asyncio.subprocess.Process) -> None:
@@ -287,7 +343,25 @@ class CliRuntime:
 
     @staticmethod
     def _parse_response(output: str) -> dict:
-        payload = json.loads(output)
+        try:
+            payload = json.loads(output)
+        except json.JSONDecodeError as exc:
+            for event in reversed(CliRuntime._event_objects(output)):
+                item = event.get("item")
+                candidates = [event.get("result"), event.get("output"), event.get("response"), event.get("content")]
+                if isinstance(item, dict):
+                    candidates.extend([item.get("text"), item.get("content"), item.get("output")])
+                for candidate in candidates:
+                    if isinstance(candidate, dict):
+                        return candidate
+                    if isinstance(candidate, str):
+                        try:
+                            result = json.loads(CliRuntime._without_markdown_fence(candidate))
+                        except json.JSONDecodeError:
+                            continue
+                        if isinstance(result, dict):
+                            return result
+            raise ValueError("CLI event stream did not contain a JSON result") from exc
         if not isinstance(payload, dict):
             raise TypeError("CLI output must be an object")
         response = payload.get("response")

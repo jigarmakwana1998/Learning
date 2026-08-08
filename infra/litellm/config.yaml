@@ -1,0 +1,16 @@
+# Every live agent call targets the stable `agent-model` alias below. Change only
+# this mapping (and its provider secret) to swap LLMs without application changes.
+# Keep provider keys in the environment; this file contains no secrets.
+model_list:
+  - model_name: agent-model
+    litellm_params:
+      model: openai/gpt-4o-mini
+      api_key: os.environ/OPENAI_API_KEY
+
+litellm_settings:
+  json_logs: true
+
+general_settings:
+  master_key: os.environ/LITELLM_MASTER_KEY
+  database_url: os.environ/DATABASE_URL
+  store_prompts_in_spend_logs: true

@@ -7,7 +7,7 @@ from dishka.integrations.fastapi import setup_dishka
 from sqlalchemy import select
 
 from app.adapters.inbound.health import router as health_router
-from app.controllers import analytics_router, auth_router, learning_router, sessions_router
+from app.controllers import analytics_router, auth_router, gateway_proxy_router, learning_router, observability_router, sessions_router
 from app.core.config import get_settings
 from app.core.database import SessionLocal, engine
 from app.core.security import hash_password
@@ -40,7 +40,9 @@ app = FastAPI(title=settings.app_name, version=settings.app_version, lifespan=li
 app.add_middleware(CORSMiddleware, allow_origins=settings.cors_origins, allow_credentials=False, allow_methods=["*"], allow_headers=["*"])
 setup_dishka(make_async_container(ApplicationProvider()), app)
 app.include_router(health_router)
+app.include_router(gateway_proxy_router)
 app.include_router(auth_router)
 app.include_router(learning_router)
 app.include_router(sessions_router)
 app.include_router(analytics_router)
+app.include_router(observability_router)

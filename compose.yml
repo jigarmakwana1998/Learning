@@ -38,7 +38,14 @@ services:
       DATABASE_URL: postgresql+asyncpg://learning_coach:${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}@postgres:5432/learning_coach
       AGENT_BROWSER_CONTENT_BOUNDARIES: "1"
       AGENT_BROWSER_MAX_OUTPUT: "6000"
+      AGENT_HARNESS: ${AGENT_HARNESS:-gemini-cli}
+      LITELLM_BASE_URL: http://litellm:4000
+      LITELLM_GEMINI_BASE_URL: http://127.0.0.1:8000/internal/litellm
+      LITELLM_API_KEY: ${LITELLM_MASTER_KEY:?Set LITELLM_MASTER_KEY in .env}
+      LITELLM_MODEL: ${LITELLM_MODEL:-agent-model}
     depends_on:
+      litellm:
+        condition: service_healthy
       postgres:
         condition: service_healthy
     read_only: true
@@ -61,6 +68,40 @@ services:
       start_period: 30s
     # edge provides outbound Internet access for Gemini and public browsing;
     # databases remain isolated on internal and publish no host ports.
+    networks: [edge, internal]
+    restart: unless-stopped
+
+  litellm:
+    image: docker.litellm.ai/berriai/litellm:main-latest
+    command: ["--config", "/app/config.yaml", "--port", "4000"]
+    environment:
+      DATABASE_URL: postgresql://learning_coach:${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}@postgres:5432/learning_coach
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      GEMINI_API_KEY: ${GEMINI_API_KEY:-}
+      OPENROUTER_API_KEY: ${OPENROUTER_API_KEY:-}
+      AZURE_API_KEY: ${AZURE_API_KEY:-}
+      AZURE_API_BASE: ${AZURE_API_BASE:-}
+      AZURE_API_VERSION: ${AZURE_API_VERSION:-}
+      LITELLM_MASTER_KEY: ${LITELLM_MASTER_KEY:?Set LITELLM_MASTER_KEY in .env}
+    depends_on:
+      postgres:
+        condition: service_healthy
+    volumes:
+      - ./infra/litellm/config.yaml:/app/config.yaml:ro
+    read_only: true
+    tmpfs: [/tmp]
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://127.0.0.1:4000/health/liveliness')\""]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 30s
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    pids_limit: 150
+    mem_limit: 512m
+    cpus: "0.75"
     networks: [edge, internal]
     restart: unless-stopped
 

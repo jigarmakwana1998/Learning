@@ -8,26 +8,26 @@ from app.core.dependencies import get_admin
 from app.core.config import get_settings
 from app.models.database import AgentRun, AgentSessionRecord, LearningRequest, SystemSetting, TranscriptEntryRecord, User
 from app.schemas.analytics import AnalyticsOverview, RequestListItem, SessionListItem
-from app.schemas.learning import AgentProviderSetting, LIVE_AGENT_PROVIDERS
+from app.schemas.learning import AgentHarnessSetting, LIVE_AGENT_HARNESSES
 
 router = APIRouter(prefix="/analytics", tags=["analytics"])
 
 
-@router.get("/settings/agent-provider", response_model=AgentProviderSetting)
-async def get_agent_provider(db: AsyncSession = Depends(get_db), _: User = Depends(get_admin)) -> AgentProviderSetting:
-    setting = await db.scalar(select(SystemSetting).where(SystemSetting.key == "agent_provider"))
-    configured = setting.value if setting and setting.value in LIVE_AGENT_PROVIDERS else get_settings().agent_provider
-    provider = configured if configured in LIVE_AGENT_PROVIDERS else "gemini-cli"
-    return AgentProviderSetting(provider=provider)
+@router.get("/settings/agent-harness", response_model=AgentHarnessSetting)
+async def get_agent_harness(db: AsyncSession = Depends(get_db), _: User = Depends(get_admin)) -> AgentHarnessSetting:
+    setting = await db.scalar(select(SystemSetting).where(SystemSetting.key == "agent_harness"))
+    configured = setting.value if setting and setting.value in LIVE_AGENT_HARNESSES else get_settings().agent_harness
+    harness = configured if configured in LIVE_AGENT_HARNESSES else "gemini-cli"
+    return AgentHarnessSetting(harness=harness)
 
 
-@router.put("/settings/agent-provider", response_model=AgentProviderSetting)
-async def set_agent_provider(payload: AgentProviderSetting, db: AsyncSession = Depends(get_db), _: User = Depends(get_admin)) -> AgentProviderSetting:
-    setting = await db.scalar(select(SystemSetting).where(SystemSetting.key == "agent_provider"))
+@router.put("/settings/agent-harness", response_model=AgentHarnessSetting)
+async def set_agent_harness(payload: AgentHarnessSetting, db: AsyncSession = Depends(get_db), _: User = Depends(get_admin)) -> AgentHarnessSetting:
+    setting = await db.scalar(select(SystemSetting).where(SystemSetting.key == "agent_harness"))
     if setting is None:
-        db.add(SystemSetting(key="agent_provider", value=payload.provider))
+        db.add(SystemSetting(key="agent_harness", value=payload.harness))
     else:
-        setting.value = payload.provider
+        setting.value = payload.harness
     await db.commit()
     return payload
 
@@ -47,18 +47,18 @@ async def users(page: int = Query(1, ge=1), page_size: int = Query(25, ge=1, le=
 
 
 @router.get("/requests", response_model=list[RequestListItem])
-async def requests(provider: str | None = None, status: str | None = None, limit: int = Query(50, ge=1, le=200), db: AsyncSession = Depends(get_db), _: User = Depends(get_admin)) -> list[RequestListItem]:
+async def requests(harness: str | None = None, status: str | None = None, limit: int = Query(50, ge=1, le=200), db: AsyncSession = Depends(get_db), _: User = Depends(get_admin)) -> list[RequestListItem]:
     query = select(LearningRequest, User, AgentRun).join(User, LearningRequest.user_id == User.id).outerjoin(AgentRun, AgentRun.learning_request_id == LearningRequest.id).order_by(LearningRequest.created_at.desc()).limit(limit)
-    if provider: query = query.where(AgentRun.provider == provider)
+    if harness: query = query.where(AgentRun.harness == harness)
     if status: query = query.where(AgentRun.status == status)
     rows = (await db.execute(query)).all()
-    return [RequestListItem(id=request.id, user_id=user.id, email=user.email, topic=request.topic, level=request.level, provider=run.provider if run else None, run_status=run.status if run else None, created_at=request.created_at) for request, user, run in rows]
+    return [RequestListItem(id=request.id, user_id=user.id, email=user.email, topic=request.topic, level=request.level, harness=run.harness if run else None, run_status=run.status if run else None, created_at=request.created_at) for request, user, run in rows]
 
 
 @router.get("/sessions", response_model=list[SessionListItem])
-async def sessions(provider: str | None = None, status: str | None = None, limit: int = Query(100, ge=1, le=200), db: AsyncSession = Depends(get_db), _: User = Depends(get_admin)) -> list[SessionListItem]:
+async def sessions(harness: str | None = None, status: str | None = None, limit: int = Query(100, ge=1, le=200), db: AsyncSession = Depends(get_db), _: User = Depends(get_admin)) -> list[SessionListItem]:
     query = select(AgentSessionRecord, AgentRun, LearningRequest).join(AgentRun, AgentSessionRecord.agent_run_id == AgentRun.id).join(LearningRequest, AgentRun.learning_request_id == LearningRequest.id).order_by(AgentSessionRecord.started_at.desc()).limit(limit)
-    if provider: query = query.where(AgentSessionRecord.provider == provider)
+    if harness: query = query.where(AgentSessionRecord.harness == harness)
     if status: query = query.where(AgentSessionRecord.status == status)
     rows = (await db.execute(query)).all()
-    return [SessionListItem(id=session.id, agent_name=session.agent_name, provider=session.provider, status=session.status, learning_request_id=request.id, topic=request.topic, duration_ms=session.duration_ms, started_at=session.started_at) for session, _, request in rows]
+    return [SessionListItem(id=session.id, agent_name=session.agent_name, harness=session.harness, status=session.status, learning_request_id=request.id, topic=request.topic, duration_ms=session.duration_ms, started_at=session.started_at) for session, _, request in rows]

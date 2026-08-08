@@ -16,7 +16,7 @@ def test_researcher_gemini_enables_only_learning_browser(monkeypatch):
     runtime = get_runtime("gemini-cli", "Researcher")
 
     assert runtime.stream_json is True
-    assert runtime.command[runtime.command.index("--model") + 1] == "gemini-3.1-flash-lite"
+    assert runtime.command[runtime.command.index("--model") + 1] == "agent-model"
     assert "stream-json" in runtime.command
     assert runtime.command[runtime.command.index("--allowed-mcp-server-names") + 1] == "learning-browser"
     assert runtime.command[runtime.command.index("--allowed-tools") + 1] == (
@@ -62,12 +62,17 @@ def test_non_researcher_gemini_disables_browser_and_uses_json(monkeypatch):
         assert runtime.timeout_seconds == 300
 
 
-def test_other_provider_commands_are_unchanged(monkeypatch):
+def test_other_harness_commands_target_litellm(monkeypatch):
     monkeypatch.delenv("CODEX_COMMAND", raising=False)
     monkeypatch.delenv("ANTIGRAVITY_CLI_COMMAND", raising=False)
 
-    assert get_runtime("codex", "Researcher").command == ["codex", "exec", "--json", "-"]
-    assert get_runtime("antigravity-cli", "Researcher").command == ["agy", "--output-format", "json"]
+    codex = get_runtime("codex", "Researcher").command
+    assert codex[:3] == ["codex", "exec", "--json"]
+    assert 'model_provider="litellm"' in codex
+    assert "agent-model" in codex
+    assert get_runtime("antigravity-cli", "Researcher").command == [
+        "agy", "--print", "--model", "agent-model", "--output-format", "stream-json",
+    ]
 
 
 def test_gemini_command_override_cannot_omit_role_safety_flags(monkeypatch):
@@ -77,20 +82,21 @@ def test_gemini_command_override_cannot_omit_role_safety_flags(monkeypatch):
     runtime = get_runtime("gemini-cli", "Researcher")
 
     assert runtime.command[:3] == ["custom-gemini", "--model", "fast"]
-    assert runtime.command[-8:] == [
-        "--output-format", "stream-json", "--approval-mode", "plan",
-        "--allowed-mcp-server-names", "learning-browser",
-        "--allowed-tools", "mcp_learning-browser_browser_search,mcp_learning-browser_browser_read",
-    ]
+    model_flags = [index for index, value in enumerate(runtime.command) if value == "--model"]
+    assert runtime.command[model_flags[-1] + 1] == "agent-model"
+    assert runtime.command[runtime.command.index("--allowed-mcp-server-names") + 1] == "learning-browser"
+    assert runtime.command[runtime.command.index("--allowed-tools") + 1] == (
+        "mcp_learning-browser_browser_search,mcp_learning-browser_browser_read"
+    )
 
 
-def test_gemini_model_can_be_overridden_without_shell_parsing(monkeypatch):
+def test_gemini_provider_model_env_cannot_bypass_litellm_alias(monkeypatch):
     monkeypatch.delenv("GEMINI_CLI_COMMAND", raising=False)
     monkeypatch.setenv("GEMINI_MODEL", "gemini-3-flash-preview")
 
     runtime = get_runtime("gemini-cli", "Planner")
 
-    assert runtime.command[runtime.command.index("--model") + 1] == "gemini-3-flash-preview"
+    assert runtime.command[runtime.command.index("--model") + 1] == "agent-model"
 
 
 @pytest.mark.asyncio
@@ -107,15 +113,22 @@ async def test_harness_persists_sanitized_tools_but_not_internal_evidence(monkey
     )
 
     class Runtime:
-        async def execute(self, _prompt):
+        async def execute(self, _prompt, **_kwargs):
             return execution
+
+    class Gateway:
+        async def create_trace_key(self, **_kwargs):
+            return "test-trace-key"
+
+        async def spend_logs(self, _api_key):
+            return []
 
     class Db:
         async def flush(self):
             pass
 
     session = SimpleNamespace(
-        id="session-id", agent_name="Researcher", status="active",
+        id="session-id", agent_run_id="run-id", agent_name="Researcher", status="active",
         output_payload=None, error_message=None, completed_at=None, duration_ms=None,
     )
     audit_calls = []
@@ -129,8 +142,13 @@ async def test_harness_persists_sanitized_tools_but_not_internal_evidence(monkey
     async def audit(*args, **kwargs):
         audit_calls.append((args, kwargs))
 
+    async def trace(*_args, **_kwargs):
+        pass
+
     monkeypatch.setattr(runtime_module, "get_runtime", lambda *_args: Runtime())
+    monkeypatch.setattr(runtime_module, "LiteLLMGateway", Gateway)
     monkeypatch.setattr(runtime_module, "record_tool_invocation", audit)
+    monkeypatch.setattr(runtime_module, "record_trace_event", trace)
     harness = AgentHarness("gemini-cli", Db())
     monkeypatch.setattr(harness, "get", get)
     monkeypatch.setattr(harness, "_append", append)

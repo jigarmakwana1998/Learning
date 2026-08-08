@@ -9,9 +9,10 @@
    Copy-Item backend/.env.example backend/.env
    ```
 
-2. In `backend/.env`, retain application secrets, set `AGENT_PROVIDER=gemini-cli`,
-   and configure Gemini authentication. The Compose stack overrides `DATABASE_URL`
-   to point at the internal PostgreSQL service.
+2. In `backend/.env`, retain application secrets and set `AGENT_HARNESS=gemini-cli`.
+   In the root `.env`, set a strong `LITELLM_MASTER_KEY` and only the upstream
+   provider credential selected by `infra/litellm/config.yaml`. The Compose stack
+   overrides `DATABASE_URL` and `LITELLM_BASE_URL` for its internal services.
 3. Start the stack from the repository root:
 
    ```powershell

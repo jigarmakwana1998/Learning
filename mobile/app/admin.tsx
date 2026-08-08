@@ -3,37 +3,37 @@ import { Link } from "expo-router";
 import { ActivityIndicator, Pressable, SafeAreaView, ScrollView, StyleSheet, Text, TextInput, View } from "react-native";
 
 import { BarChart } from "@/components/BarChart";
-import { getAgentProvider, getOverview, getSessions, getUsers, setAgentProvider, AgentProvider, AnalyticsOverview, Session, User } from "@/lib/api";
+import { getAgentHarness, getOverview, getSessions, getUsers, setAgentHarness, AgentHarness, AnalyticsOverview, Session, User } from "@/lib/api";
 
-const providers: AgentProvider[] = ["gemini-cli", "codex", "antigravity-cli"];
+const harnesses: AgentHarness[] = ["gemini-cli", "codex", "antigravity-cli"];
 
 export default function AdminScreen() {
   const [overview, setOverview] = useState<AnalyticsOverview | null>(null);
   const [users, setUsers] = useState<User[]>([]);
   const [sessions, setSessions] = useState<Session[]>([]);
-  const [provider, setProvider] = useState<AgentProvider>("gemini-cli");
+  const [harness, setHarness] = useState<AgentHarness>("gemini-cli");
   const [query, setQuery] = useState("");
   const [error, setError] = useState("");
 
-  const load = () => Promise.all([getOverview(), getUsers(), getSessions(), getAgentProvider()])
+  const load = () => Promise.all([getOverview(), getUsers(), getSessions(), getAgentHarness()])
     .then(([currentOverview, currentUsers, currentSessions, setting]) => {
-      setOverview(currentOverview); setUsers(currentUsers.items); setSessions(currentSessions); setProvider(setting.provider); setError("");
+      setOverview(currentOverview); setUsers(currentUsers.items); setSessions(currentSessions); setHarness(setting.harness); setError("");
     })
     .catch((reason: unknown) => setError(reason instanceof Error ? reason.message : "Unable to load admin data"));
 
   useEffect(() => { load(); }, []);
-  const visibleSessions = useMemo(() => sessions.filter(session => `${session.topic} ${session.agent_name} ${session.provider}`.toLowerCase().includes(query.toLowerCase())), [sessions, query]);
-  const chooseProvider = (next: AgentProvider) => setAgentProvider(next).then(result => setProvider(result.provider)).catch((reason: unknown) => setError(reason instanceof Error ? reason.message : "Unable to update provider"));
+  const visibleSessions = useMemo(() => sessions.filter(session => `${session.topic} ${session.agent_name} ${session.harness}`.toLowerCase().includes(query.toLowerCase())), [sessions, query]);
+  const chooseHarness = (next: AgentHarness) => setAgentHarness(next).then(result => setHarness(result.harness)).catch((reason: unknown) => setError(reason instanceof Error ? reason.message : "Unable to update harness"));
 
   if (!overview && !error) return <SafeAreaView style={styles.center}><ActivityIndicator /></SafeAreaView>;
   return <SafeAreaView style={styles.safe}><ScrollView contentContainerStyle={styles.container}>
     <Link href="/" style={styles.link}>Back to Learning Coach</Link><Text style={styles.title}>Admin analytics</Text>
     {error ? <Text style={styles.error}>{error}</Text> : <>
-      <View style={styles.card}><Text style={styles.section}>Default agent provider</Text><Text style={styles.muted}>Changes apply to the next learning run without restarting the API.</Text><View style={styles.providers}>{providers.map(option => <Pressable key={option} onPress={() => chooseProvider(option)} style={[styles.provider, provider === option && styles.providerSelected]}><Text style={provider === option ? styles.providerTextSelected : styles.providerText}>{option}</Text></Pressable>)}</View></View>
+      <View style={styles.card}><Text style={styles.section}>Agent harness</Text><Text style={styles.muted}>Choose the agent runtime. Every harness routes model calls through the same LiteLLM alias.</Text><View style={styles.providers}>{harnesses.map(option => <Pressable key={option} onPress={() => chooseHarness(option)} style={[styles.provider, harness === option && styles.providerSelected]}><Text style={harness === option ? styles.providerTextSelected : styles.providerText}>{option}</Text></Pressable>)}</View></View>
       <View style={styles.grid}>{[["Users", overview?.total_users], ["Requests", overview?.total_requests], ["Completed", overview?.completed_runs], ["Transcripts", overview?.transcript_entries]].map(([label, value]) => <View key={String(label)} style={styles.metric}><Text style={styles.metricValue}>{value}</Text><Text>{label}</Text></View>)}</View>
       <View style={styles.card}><Text style={styles.section}>Run outcomes</Text><BarChart values={[overview?.completed_runs ?? 0, overview?.failed_runs ?? 0, overview?.active_sessions ?? 0]} /><Text style={styles.muted}>Completed / Failed / Active sessions</Text></View>
       <View style={styles.card}><Text style={styles.section}>Users ({users.length})</Text>{users.map(user => <Text key={user.id} style={styles.row}>{user.email} / {user.role}</Text>)}</View>
-      <TextInput value={query} onChangeText={setQuery} placeholder="Filter sessions by topic, agent, provider" style={styles.input} />
+      <TextInput value={query} onChangeText={setQuery} placeholder="Filter sessions by topic, agent, or harness" style={styles.input} />
       <View style={styles.card}><Text style={styles.section}>Agent sessions</Text>{visibleSessions.map(session => <Link key={session.id} href={{ pathname: "/session/[id]", params: { id: session.id } }} style={styles.row}>{session.agent_name} / {session.topic} / {session.status}</Link>)}</View>
       <Pressable style={styles.refresh} onPress={load}><Text style={styles.refreshText}>Refresh analytics</Text></Pressable>
     </>}

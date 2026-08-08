@@ -18,8 +18,7 @@ from app.browser.gateway import BrowserGateway
 from app.core.config import get_settings
 from app.core.security import encrypt
 from app.harness import AgentHarness
-from app.harness.providers.factory import get_runtime
-from app.mcp.audit import record_tool_invocation
+from app.mcp.audit import record_tool_invocation, record_trace_event
 from app.models.database import (
     AgentRun, AgentSessionRecord, AssignmentSubmissionRecord, LearningRequest,
     LessonProgressRecord, QuizSubmissionRecord, SystemSetting, TranscriptEntryRecord, User,
@@ -27,7 +26,7 @@ from app.models.database import (
 from app.schemas.learning import (
     Assessment, AssignmentSubmissionResponse, Course, CurriculumModule,
     LearningGoal, LearningProgressResponse, LearningRun, LearningRunRequest, Lesson,
-    LIVE_AGENT_PROVIDERS, QuizQuestionFeedback, QuizSubmissionResponse, ResearchBrief, Source,
+    LIVE_AGENT_HARNESSES, QuizQuestionFeedback, QuizSubmissionResponse, ResearchBrief, Source,
     SourceVisit,
 )
 
@@ -36,23 +35,23 @@ class LearningService:
     browser_gateway_factory = BrowserGateway
 
     async def create_run(self, db: AsyncSession, user: User, request: LearningRunRequest) -> LearningRun:
-        configured = await db.scalar(select(SystemSetting).where(SystemSetting.key == "agent_provider"))
-        configured_provider = configured.value if configured else get_settings().agent_provider
-        provider = configured_provider if configured_provider in LIVE_AGENT_PROVIDERS else "gemini-cli"
-        if provider not in LIVE_AGENT_PROVIDERS:
-            raise ValueError("Unsupported agent provider")
+        configured = await db.scalar(select(SystemSetting).where(SystemSetting.key == "agent_harness"))
+        configured_harness = configured.value if configured else get_settings().agent_harness
+        harness_name = configured_harness if configured_harness in LIVE_AGENT_HARNESSES else "gemini-cli"
+        if harness_name not in LIVE_AGENT_HARNESSES:
+            raise ValueError("Unsupported agent harness")
         goal = LearningGoal.model_validate(request)
         learning_request = LearningRequest(user_id=user.id, topic=goal.topic, level=goal.level, hours_per_week=goal.hours_per_week, weeks=goal.weeks)
         db.add(learning_request)
         await db.flush()
-        run = AgentRun(learning_request_id=learning_request.id, provider=provider)
+        run = AgentRun(learning_request_id=learning_request.id, harness=harness_name)
         db.add(run)
         await db.flush()
-        harness = AgentHarness(provider, db)
+        harness = AgentHarness(harness_name, db)
         planner = PlannerAgent()
         try:
             research_session, research = await self._browser_research(
-                db, run.id, provider, goal
+                db, run.id, harness_name, goal
             )
             planner_session, planner_output = await harness.start_and_run(
                 run.id, planner.name, planner.build_prompt(goal, research.model_dump())
@@ -63,7 +62,7 @@ class LearningService:
             curriculum = self._provider_curriculum(goal, planner_output, research)
             assessment = self._provider_assessment(goal, planner_output)
             result = LearningRun(
-                id=run.id, provider=provider, research=research, curriculum=curriculum,
+                id=run.id, harness=harness_name, research=research, curriculum=curriculum,
                 course=Course(title=f"{goal.topic} learning path", modules=curriculum), assessment=assessment,
                 sessions={
                     "Researcher": research_session.id,
@@ -154,7 +153,7 @@ class LearningService:
         self,
         db: AsyncSession,
         run_id: str,
-        provider: str,
+        harness: str,
         goal: LearningGoal,
     ) -> tuple[AgentSessionRecord, ResearchBrief]:
         """Plan broad discovery, browse public pages, then synthesize verified evidence."""
@@ -162,18 +161,27 @@ class LearningService:
         audit_session = AgentSessionRecord(
             agent_run_id=run_id,
             agent_name="BrowserResearch",
-            provider=provider,
+            harness=harness,
             input_payload={"agent": "Researcher", "pipeline": "browser-research"},
         )
         db.add(audit_session)
         await db.flush()
+        await record_trace_event(
+            db,
+            run_id=run_id,
+            session_id=audit_session.id,
+            event_type="lifecycle",
+            name="browser.pipeline.started",
+            input_payload={"goal": goal.model_dump(mode="json")},
+            metadata={"harness": harness, "pipeline": "browser-research"},
+        )
         started = perf_counter()
         try:
             query_planner = ResearchQueryPlannerAgent()
             query_session, query_output = await self._plain_research_call(
                 db,
                 run_id,
-                provider,
+                harness,
                 query_planner.name,
                 query_planner.build_prompt(goal),
             )
@@ -192,7 +200,7 @@ class LearningService:
             search_results = await asyncio.gather(*(run_search(item) for item in queries))
             for _item, result, call_started in search_results:
                 await self._audit_browser_call(
-                    db, audit_session.id, "browser_search", result, call_started
+                    db, run_id, audit_session.id, "browser_search", result, call_started
                 )
                 for item in result.get("results", []):
                     if not isinstance(item, dict):
@@ -214,7 +222,7 @@ class LearningService:
                 )
                 for _item, result, call_started in replacement_results:
                     await self._audit_browser_call(
-                        db, audit_session.id, "browser_search", result, call_started
+                        db, run_id, audit_session.id, "browser_search", result, call_started
                     )
                     for item in result.get("results", []):
                         if not isinstance(item, dict):
@@ -276,7 +284,7 @@ class LearningService:
             selector_session, selector_output = await self._plain_research_call(
                 db,
                 run_id,
-                provider,
+                harness,
                 selector.name,
                 selector.build_prompt(goal, {"candidates": selector_candidates[:40]}),
             )
@@ -300,7 +308,7 @@ class LearningService:
             read_results = await asyncio.gather(*(run_read(batch) for batch in batches))
             for result, call_started in read_results:
                 await self._audit_browser_call(
-                    db, audit_session.id, "browser_read", result, call_started
+                    db, run_id, audit_session.id, "browser_read", result, call_started
                 )
                 for page in result.get("pages", []):
                     if not isinstance(page, dict):
@@ -341,7 +349,7 @@ class LearningService:
                 part_session, part_output = await self._plain_research_call(
                     db,
                     run_id,
-                    provider,
+                    harness,
                     f"ResearchSynthesisPart{index}",
                     synthesis.build_prompt(goal, {"pages": page_batch}),
                 )
@@ -388,10 +396,31 @@ class LearningService:
                 f"Completed {len(queries)} parallel research queries, selected 12 candidates, and read {len(pages)} public pages. Page bodies are not persisted.",
                 1,
             )
+            await record_trace_event(
+                db,
+                run_id=run_id,
+                session_id=audit_session.id,
+                event_type="lifecycle",
+                name="browser.pipeline.completed",
+                output_payload=audit_session.output_payload,
+                metadata={"harness": harness, "pipeline": "browser-research"},
+                duration_ms=int((perf_counter() - started) * 1000),
+            )
             return synthesis_session, research
-        except Exception:
+        except Exception as error:
             audit_session.status = "failed"
             audit_session.error_message = "Browser research pipeline failed."
+            await record_trace_event(
+                db,
+                run_id=run_id,
+                session_id=audit_session.id,
+                event_type="lifecycle",
+                name="browser.pipeline.failed",
+                status="failed",
+                metadata={"harness": harness, "pipeline": "browser-research"},
+                error=str(error)[:2000],
+                duration_ms=int((perf_counter() - started) * 1000),
+            )
             raise
         finally:
             audit_session.completed_at = datetime.now(timezone.utc)
@@ -402,52 +431,12 @@ class LearningService:
         self,
         db: AsyncSession,
         run_id: str,
-        provider: str,
+        harness: str,
         role: str,
         prompt: str,
     ) -> tuple[AgentSessionRecord, dict]:
-        """Call a non-MCP role without persisting browser page bodies in transcripts."""
-        session = AgentSessionRecord(
-            agent_run_id=run_id,
-            agent_name=role,
-            provider=provider,
-            input_payload={"agent": role, "pipeline": "browser-research"},
-        )
-        db.add(session)
-        await db.flush()
-        started = perf_counter()
-        try:
-            redacted_inputs = {
-                "ResearchQueryPlanner": (
-                    "Planned eight complementary research queries, two bounded replacements, "
-                    "and browser-verifiable canonical seed URLs."
-                ),
-                "ResearchSelector": "Selected public source candidates from normalized URLs.",
-            }
-            redacted_input = redacted_inputs.get(role)
-            if redacted_input is None and role.startswith("ResearchSynthesisPart"):
-                redacted_input = (
-                    "Synthesized one bounded batch of browser-read evidence. Page bodies were supplied "
-                    "in memory and are intentionally omitted from the durable transcript."
-                )
-            redacted_input = redacted_input or "Processed bounded research evidence."
-            self._add_transcript_entry(db, session.id, "user", redacted_input, 1)
-            execution = await get_runtime(provider, role).execute(prompt)
-            payload = execution.payload if hasattr(execution, "payload") else execution
-            if not isinstance(payload, dict):
-                raise ValueError(f"{role} must return a JSON object.")  # noqa: TRY004
-            session.output_payload = payload
-            session.status = "completed"
-            self._add_transcript_entry(db, session.id, "assistant", json.dumps(payload), 2)
-            return session, payload
-        except Exception as error:
-            session.status = "failed"
-            session.error_message = str(error)[:2000]
-            raise
-        finally:
-            session.completed_at = datetime.now(timezone.utc)
-            session.duration_ms = int((perf_counter() - started) * 1000)
-            await db.flush()
+        """Run every research model decision through the traced harness boundary."""
+        return await AgentHarness(harness, db).start_and_run(run_id, role, prompt)
 
     @classmethod
     def _validated_query_plan(
@@ -637,6 +626,7 @@ class LearningService:
     async def _audit_browser_call(
         cls,
         db: AsyncSession,
+        run_id: str,
         session_id: str,
         tool_name: str,
         result: dict,
@@ -667,23 +657,40 @@ class LearningService:
         domains = sorted({urlsplit(url).hostname for url in urls if urlsplit(url).hostname})
         status = "success" if result.get("status") == "ok" else "failed"
         error_payload = result.get("error") if isinstance(result.get("error"), dict) else {}
-        await record_tool_invocation(
+        metadata = {
+            "query": str(result.get("query") or "")[:500] if tool_name == "browser_search" else None,
+            "purpose": str(result.get("purpose") or "")[:500] if tool_name == "browser_search" else None,
+            "urls": urls[:20],
+            "domains": domains[:20],
+            "result_count": len(items),
+            "success_count": success_count,
+            "page_results": page_results,
+            "pipeline": "browser-research",
+        }
+        invocation = await record_tool_invocation(
             db,
             session_id,
             tool_name,
             status,
-            {
-                "query": str(result.get("query") or "")[:500] if tool_name == "browser_search" else None,
-                "purpose": str(result.get("purpose") or "")[:500] if tool_name == "browser_search" else None,
-                "urls": urls[:20],
-                "domains": domains[:20],
-                "result_count": len(items),
-                "success_count": success_count,
-                "page_results": page_results,
-                "pipeline": "browser-research",
-            },
+            metadata,
             str(error_payload.get("code") or "Browser operation unavailable") if status == "failed" else None,
             started_at=started_at,
+        )
+        await record_trace_event(
+            db,
+            run_id=run_id,
+            session_id=session_id,
+            event_type="tool",
+            name=tool_name,
+            status="completed" if status == "success" else "failed",
+            input_payload={
+                "query": metadata["query"],
+                "purpose": metadata["purpose"],
+            } if tool_name == "browser_search" else {"urls": urls[:20]},
+            output_payload={"result_count": len(items), "success_count": success_count},
+            metadata=metadata,
+            error=invocation.error_message,
+            duration_ms=invocation.duration_ms,
         )
 
     @classmethod

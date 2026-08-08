@@ -62,17 +62,17 @@ Dishka, and that service calls a replaceable outbound health port.
 
 For local PostgreSQL, run `docker compose -f docker-compose.yml up -d` from `backend/` and set `DATABASE_URL=postgresql+asyncpg://learning_coach:learning_coach@127.0.0.1:5432/learning_coach` in `backend/.env`. Run `alembic upgrade head` to create or update the schema. For deployment, use the Supabase Session Pooler connection string in `DATABASE_URL`, then run that same migration command in the deployment environment. Supabase Auth owns email/password credentials; the backend verifies each Supabase access token and creates a matching application profile on first use.
 
-The API docs are available at `http://127.0.0.1:8000/docs`. Course generation always uses a live agent provider and public browser research. Gemini CLI is the default:
+The API docs are available at `http://127.0.0.1:8000/docs`. Course generation always uses a live agent harness and public browser research. Gemini CLI is the default:
 
 ```bash
-AGENT_PROVIDER=gemini-cli  # gemini-cli, codex, or antigravity-cli
+AGENT_HARNESS=gemini-cli  # gemini-cli, codex, or antigravity-cli
 ```
 
 For local-only development, set `DATABASE_URL=sqlite+aiosqlite:///./learning_local.db` and `LOCAL_AUTH=true`. This explicitly disables Supabase token verification for that process; never enable it in a deployed environment.
 
-Copy `backend/.env.example` to `backend/.env`, set the Supabase values, and replace the encryption key before deployment. Each provider is executed through its installed CLI; ensure it is authenticated on the server. Install the pinned project tools with `npm install`, run `npm run browser:install`, and verify them with `npm run browser:doctor`. CLI invocation flags can change, so the example supports `CODEX_COMMAND`, `GEMINI_CLI_COMMAND`, and `ANTIGRAVITY_CLI_COMMAND` overrides. The harness keeps commands behind one adapter.
+Copy `backend/.env.example` to `backend/.env`, set the Supabase values, and replace the encryption key before deployment. Each harness is executed through its installed CLI. Install the pinned project tools with `npm install`, run `npm run browser:install`, and verify them with `npm run browser:doctor`. Antigravity CLI 1.1.8+ is required for headless `stream-json` tracing. The application injects a session-scoped LiteLLM key and stable `agent-model` alias into every harness process; executable overrides cannot remove the enforced gateway/model flags.
 
-Set the first administrator's Supabase Auth `app_metadata.role` to `admin` in the Supabase dashboard or with a server-side administrative tool. The mobile admin screen then controls the default agent provider; the setting is stored in PostgreSQL and applies to new runs immediately without restarting the API.
+Set the first administrator's Supabase Auth `app_metadata.role` to `admin` in the Supabase dashboard or with a server-side administrative tool. The mobile admin screen controls the default agent harness, never the LLM provider; the setting is stored in PostgreSQL and applies to new runs immediately without restarting the API.
 
 ## Start the mobile app
 
@@ -97,7 +97,11 @@ Copy `mobile/.env.example` to `mobile/.env`. Set the Supabase Project URL and pu
 3. **Research selector and synthesis** filter the readable evidence into 8-12 verified sources with concrete teaching points.
 4. **Planner** creates the complete course, paragraph-level citations, quizzes, answer explanations, assignment, rubric, and project. Invalid or unverified output fails instead of falling back to generic content.
 
-The adapters support Codex, Gemini CLI, and Antigravity CLI. Gemini CLI is retained as requested; Google's current tooling is transitioning it to Antigravity CLI, so Antigravity is available as a separate provider. [Google's Antigravity documentation](https://www.antigravity.google/docs/cli-overview) describes the current CLI; [the Gemini CLI transition notice](https://github.com/google-gemini/gemini-cli/discussions/27274) explains the migration.
+The adapters support Codex, Gemini CLI, and Antigravity CLI as independent harnesses. LiteLLM is not a harness: it is the mandatory model gateway beneath all three. The application requests the stable `agent-model` alias; changing that alias in `infra/litellm/config.yaml` swaps the underlying LLM without changing harness selection. Gemini CLI is retained as requested; Google's current tooling is transitioning it to Antigravity CLI, so Antigravity remains a separate harness. [Google's Antigravity documentation](https://www.antigravity.google/docs/cli-overview) describes the current CLI; [the Gemini CLI transition notice](https://github.com/google-gemini/gemini-cli/discussions/27274) explains the migration.
+
+### Agent observability
+
+Each live session receives a short-lived LiteLLM virtual key, joining proxy model records to the exact harness session. The append-only trace ledger combines model requests and responses, actual model/model group, tokens, latency, and cost with harness lifecycle and browser/tool events. The authenticated `/observability` run explorer presents the merged trace as a timeline, expandable structured payloads, and a Learning Coach → harness → LiteLLM → model topology. Prompt and response storage is enabled intentionally for complete tracing; set appropriate access, retention, and redaction policies before production use.
 
 ## Backend structure
 
@@ -106,7 +110,7 @@ backend/app/
 ├── agents/       # Researcher, Planner, Examiner prompts and role contracts
 ├── controllers/  # HTTP route handlers
 ├── core/         # configuration
-├── harness/      # provider runtimes plus start/resume/close/transcript sessions
+├── harness/      # harness runtimes, LiteLLM gateway, and durable sessions
 ├── mcp/          # safe tool contracts agents can use
 ├── models/       # domain models (session and transcript entities)
 ├── schemas/      # API request/response validation

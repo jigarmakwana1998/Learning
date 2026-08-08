@@ -160,6 +160,14 @@ def _headers(client: TestClient, email: str, password: str) -> dict[str, str]:
 
 
 def test_fake_browser_and_gemini_executables_generate_complete_course(tmp_path, monkeypatch):
+    class FakeLiteLLMGateway:
+        async def create_trace_key(self, **_kwargs):
+            return "test-session-trace-key"
+
+        async def spend_logs(self, _api_key):
+            return []
+
+    monkeypatch.setattr("app.harness.runtime.LiteLLMGateway", FakeLiteLLMGateway)
     fake_browser = tmp_path / "fake_agent_browser.py"
     fake_gemini = tmp_path / "fake_gemini.py"
     _write_fake_browser(fake_browser)
@@ -183,12 +191,12 @@ def test_fake_browser_and_gemini_executables_generate_complete_course(tmp_path, 
     )
     with TestClient(app) as client:
         admin = _headers(client, "admin@example.com", "AdminPass123!")
-        provider = client.put(
-            "/analytics/settings/agent-provider",
+        harness = client.put(
+            "/analytics/settings/agent-harness",
             headers=admin,
-            json={"provider": "gemini-cli"},
+            json={"harness": "gemini-cli"},
         )
-        assert provider.status_code == 200, provider.text
+        assert harness.status_code == 200, harness.text
         try:
             email = f"fake-cli-{uuid4().hex}@example.com"
             registration = client.post(
@@ -316,6 +324,6 @@ def test_fake_browser_and_gemini_executables_generate_complete_course(tmp_path, 
             ).status_code == 404
         finally:
             reset = client.put(
-                "/analytics/settings/agent-provider", headers=admin, json={"provider": "gemini-cli"}
+                "/analytics/settings/agent-harness", headers=admin, json={"harness": "gemini-cli"}
             )
             assert reset.status_code == 200, reset.text

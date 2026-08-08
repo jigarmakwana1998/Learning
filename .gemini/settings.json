@@ -5,6 +5,12 @@
       "modelRouting": false
     }
   },
+  "security": {
+    "auth": {
+      "selectedType": "gemini-api-key",
+      "enforcedType": "gemini-api-key"
+    }
+  },
   "mcp": {
     "allowed": [
       "learning-browser"

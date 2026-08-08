@@ -51,7 +51,7 @@ async def test_streaming_execution_finishes_on_result_without_waiting_for_eof(mo
     monkeypatch.setattr(CliRuntime, "_terminate_process_tree", staticmethod(terminate))
     runtime = CliRuntime("gemini-cli", ["gemini"], "UNSET_GEMINI_COMMAND", stream_json=True)
 
-    execution = await runtime.execute("prompt")
+    execution = await runtime.execute("prompt", gateway_api_key="test-trace-key")
 
     assert execution.payload == {"ok": True}
     assert terminated == [1234]
@@ -74,13 +74,14 @@ async def test_gemini_runtime_maps_api_key_without_cloud_project_and_unwraps_res
     monkeypatch.setenv("project_id", "projects/784566960532")
     monkeypatch.setattr(asyncio, "create_subprocess_exec", create_process)
 
-    execution = await CliRuntime("gemini-cli", ["gemini", "--output-format", "json"], "GEMINI_CLI_COMMAND", prompt_flag="-p").execute("teach attention")
+    execution = await CliRuntime("gemini-cli", ["gemini", "--output-format", "json"], "GEMINI_CLI_COMMAND", prompt_flag="-p").execute("teach attention", gateway_api_key="test-trace-key")
 
     assert execution.payload == {"topic": "Attention", "sources": []}
     assert captured["command"][-2:] == ("-p", "")
     assert captured["kwargs"]["stdin"] is asyncio.subprocess.PIPE
     assert captured["process"].input == b"teach attention"
-    assert captured["kwargs"]["env"]["GEMINI_API_KEY"] == "test-key-not-a-real-secret"
+    assert captured["kwargs"]["env"]["GEMINI_API_KEY"] == "test-trace-key"
+    assert captured["kwargs"]["env"]["GOOGLE_GEMINI_BASE_URL"] == "http://127.0.0.1:4000"
     assert "GOOGLE_CLOUD_PROJECT" not in captured["kwargs"]["env"]
     assert captured["kwargs"]["env"]["GEMINI_CLI_TRUST_WORKSPACE"] == "true"
 
@@ -101,7 +102,7 @@ async def test_gemini_runtime_maps_cloud_project_only_for_explicit_vertex_auth(m
     await CliRuntime(
         "gemini-cli", ["gemini", "--output-format", "json"],
         "GEMINI_CLI_COMMAND", prompt_flag="-p",
-    ).execute("teach attention")
+    ).execute("teach attention", gateway_api_key="test-trace-key")
 
     assert captured["kwargs"]["env"]["GOOGLE_CLOUD_PROJECT"] == "projects/784566960532"
 
@@ -279,7 +280,7 @@ async def test_structured_rate_limit_retries_once_and_hides_diagnostics(monkeypa
     runtime = CliRuntime("gemini-cli", ["gemini"], "UNSET_GEMINI_COMMAND")
 
     with pytest.raises(RuntimeError, match="rate limit exceeded") as raised:
-        await runtime.execute("prompt")
+        await runtime.execute("prompt", gateway_api_key="test-trace-key")
 
     assert calls == 2
     assert sleeps == [0]
@@ -308,7 +309,7 @@ async def test_timeout_terminates_provider_process_tree(monkeypatch):
     runtime = CliRuntime("gemini-cli", ["gemini"], "UNSET_GEMINI_COMMAND", timeout_seconds=0.01)
 
     with pytest.raises(RuntimeError, match="timed out"):
-        await runtime.execute("prompt")
+        await runtime.execute("prompt", gateway_api_key="test-trace-key")
 
     assert terminated == [4242]
 

@@ -44,6 +44,7 @@ jobs:
           MINIO_ROOT_USER: ci-minio-user
           MINIO_ROOT_PASSWORD: ci-minio-password
           GRAFANA_ADMIN_PASSWORD: ci-grafana-password
+          LITELLM_MASTER_KEY: sk-ci
         run: |
           cp backend/.env.example backend/.env
           docker compose -f compose.yml config --quiet

@@ -19,7 +19,7 @@ class RequestListItem(BaseModel):
     email: str
     topic: str
     level: str
-    provider: str | None
+    harness: str | None
     run_status: str | None
     created_at: datetime
 
@@ -27,7 +27,7 @@ class RequestListItem(BaseModel):
 class SessionListItem(BaseModel):
     id: str
     agent_name: str
-    provider: str
+    harness: str
     status: str
     learning_request_id: str
     topic: str
