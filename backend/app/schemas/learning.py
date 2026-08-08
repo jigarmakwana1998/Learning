@@ -22,10 +22,10 @@ class AgentProviderSetting(BaseModel):
 
 
 class Source(BaseModel):
-    title: str
+    title: str = Field(min_length=2, max_length=500)
     url: str
     kind: Literal["documentation", "paper", "book", "lecture", "article", "repository"]
-    rationale: str
+    rationale: str = Field(min_length=8, max_length=2000)
 
 
 class ResearchBrief(BaseModel):
@@ -50,6 +50,9 @@ class Lesson(BaseModel):
     content: str
     practice: str
     estimated_minutes: int = Field(ge=5, le=240)
+    # Optional for stored legacy/mock courses. Real provider output is validated
+    # and populated with URLs from its containing module when omitted.
+    source_urls: list[str] = Field(default_factory=list)
 
 
 class QuizItem(BaseModel):

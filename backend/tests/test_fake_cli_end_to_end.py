@@ -48,7 +48,8 @@ def _write_fake_gemini(path: Path) -> None:
 prompt = sys.argv[-1]
 sources = [
     {'title': f'Source {index}', 'url': f'https://docs.example.com/source-{index}',
-     'kind': 'documentation', 'rationale': f'Verified evidence {index}'}
+     'kind': ['documentation', 'paper', 'book', 'lecture', 'article', 'repository'][index % 6],
+     'rationale': f'Verified evidence for curriculum section {index}'}
     for index in range(8)
 ]
 if '\"agent\": \"Researcher\"' in prompt:
@@ -59,10 +60,33 @@ if '\"agent\": \"Researcher\"' in prompt:
                       'output': {'pages': [{'status': 'ok', 'url': item['url']} for item in sources]}}))
     print(json.dumps({'type': 'result', 'response': json.dumps({'topic': 'Python functions', 'sources': sources})}))
 elif '\"agent\": \"Planner\"' in prompt:
+    concepts = ('PROVIDER_AUTHORED_CONTENT: A Python function creates a named unit of behavior. Parameters bind each supplied '
+                'argument to a local name, the body transforms those values, and return sends a result back to the caller. '
+                'A worked example traces def double(value): return value * 2 and compares double(3) with its observable result, '
+                '6. The caller owns the returned value, while names created inside the body remain local. A useful validation '
+                'loop predicts an output, runs one representative input, and explains any mismatch before adding a boundary case. ' * 4)
+    validation = ('PROVIDER_VALIDATION_CONTENT: Validation compares a stated expectation with an observed return value. Start '
+                  'with a representative input, add a boundary value, and then test an invalid value where the function contract '
+                  'defines an error. Keep one variable changing at a time so a mismatch points to a specific assumption. Record '
+                  'the call, expected result, actual result, and explanation. This evidence distinguishes a real behavioral check '
+                  'from a plausible-looking output and makes later revisions deliberate. ' * 5)
     curriculum = [{'week': 1, 'title': 'Function foundations',
                    'outcomes': ['Define and call a function', 'Validate a result'],
-                   'source_urls': [sources[0]['url']], 'overview': 'Learn by building.',
-                   'estimated_hours': 3, 'lessons': []}]
+                   'source_urls': [sources[0]['url'], sources[1]['url']],
+                   'overview': 'Build a precise mental model of Python functions, then apply it to observable examples.',
+                   'estimated_hours': 3,
+                   'lessons': [
+                     {'id': 'provider-functions-concepts', 'title': 'Function inputs and outputs',
+                      'objective': 'Explain how parameters bind inputs and return values expose outputs.',
+                      'content': concepts,
+                      'practice': 'Implement double and three related functions, then record inputs, predicted outputs, and actual outputs.',
+                      'estimated_minutes': 60, 'source_urls': [sources[0]['url']]},
+                     {'id': 'provider-functions-validation', 'title': 'Validate function behavior',
+                      'objective': 'Use representative and boundary examples to validate a function result.',
+                      'content': validation,
+                      'practice': 'Write three executable checks for one function and explain what each check demonstrates about its contract.',
+                      'estimated_minutes': 60, 'source_urls': [sources[1]['url']]}
+                   ]}]
     print(json.dumps({'response': json.dumps({'curriculum': curriculum})}))
 else:
     print(json.dumps({'response': json.dumps({'quiz': [], 'assignment': {}, 'project': 'Practice project'})}))
@@ -114,8 +138,28 @@ def test_fake_browser_and_gemini_executables_generate_complete_course(tmp_path, 
             course = response.json()
             assert len(course["research"]["sources"]) == 8
             assert course["course"]["modules"][0]["lessons"]
+            assert course["course"]["modules"][0]["lessons"][0]["content"].startswith(
+                "PROVIDER_AUTHORED_CONTENT"
+            )
+            verified_urls = {source["url"] for source in course["research"]["sources"]}
+            assert set(course["course"]["modules"][0]["source_urls"]) <= verified_urls
+            assert all(
+                set(lesson["source_urls"]) <= verified_urls
+                for lesson in course["course"]["modules"][0]["lessons"]
+            )
             assert course["assessment"]["quiz_items"]
             assert course["assessment"]["assignment"]["deliverables"]
+            assert set(course["sessions"]) == {"Researcher", "Planner"}
+            assert all(
+                "correct_answer" not in question and "explanation" not in question
+                for question in course["assessment"]["quiz_items"]
+            )
+
+            saved = client.get(f"/learning-runs/{course['id']}", headers=learner)
+            assert saved.status_code == 200, saved.text
+            saved_course = saved.json()
+            assert saved_course["course"]["modules"][0]["lessons"] == course["course"]["modules"][0]["lessons"]
+            assert len(saved_course["research"]["sources"]) == 8
         finally:
             reset = client.put(
                 "/analytics/settings/agent-provider", headers=admin, json={"provider": "mock"}
