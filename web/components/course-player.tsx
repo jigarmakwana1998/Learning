@@ -193,10 +193,14 @@ function CitationRow({ urls, sourcesByUrl }: { urls: string[]; sourcesByUrl: Map
 function EvidenceView({ run }: { run: LearningRun }) {
   const visits = run.research.visited_sources ?? [];
   const readCount = visits.filter((visit) => visit.status === "read").length;
+  const coverage = run.research.coverage ?? [];
+  const coveredCount = coverage.filter((item) => item.status === "covered").length;
   return (
     <section className="pt-6" aria-labelledby="evidence-title">
       <h3 id="evidence-title" className="text-2xl font-bold">Research evidence</h3>
-      <p className="mt-2 max-w-[70ch] text-muted-foreground">The agent read {readCount} public pages and selected {run.research.sources.length} sources for the course. Search-result pages are never accepted as citations.</p>
+      <p className="mt-2 max-w-[70ch] text-muted-foreground">The agent stopped when evidence coverage was sufficient or no further useful evidence could be gathered. It read {readCount} public pages and grounded the course in {run.research.sources.length} source{run.research.sources.length === 1 ? "" : "s"}. Search-result pages are never accepted as citations.</p>
+      {coverage.length ? <p className="mt-2 text-sm font-semibold">Coverage: {coveredCount}/{coverage.length} requirements covered · {run.research.stop_reason?.replaceAll("_", " ")}</p> : null}
+      {run.research.warnings?.length ? <div className="mt-4 rounded-xl border border-amber-300 bg-amber-50 p-4 text-sm text-amber-950 dark:border-amber-800 dark:bg-amber-950 dark:text-amber-100"><p className="font-semibold">Research coverage is partial</p><ul className="mt-2 list-disc pl-5">{run.research.warnings.map((warning) => <li key={warning}>{warning}</li>)}</ul></div> : null}
 
       <div className="mt-7 grid gap-8 xl:grid-cols-[minmax(0,1fr)_minmax(18rem,0.7fr)]">
         <section>

@@ -59,24 +59,23 @@ sources = [
 ]
 if agent == 'ResearchQueryPlanner':
     response = {
+        'coverage_requirements': [{
+            'id': 'core', 'question': 'How do Python functions bind inputs and return outputs?',
+            'priority': 'core', 'depth': 'detailed', 'evidence_policy': 'single_source_ok'
+        }],
         'queries': [
-            {'query': f'Lead{index} Python function evidence angle', 'purpose': f'Distinct research purpose {index}'}
-            for index in range(8)
-        ],
-        'replacement_queries': [
-            {'query': f'Replacement{index} Python function evidence', 'purpose': f'Replacement research purpose {index}'}
-            for index in range(2)
+            {'query': 'Python functions authoritative guide', 'purpose': 'Cover the core mechanism', 'coverage_ids': ['core']}
         ],
         'seed_candidates': [
-            {'title': item['title'], 'url': item['url'], 'purpose': f'Canonical source purpose {index}'}
-            for index, item in enumerate(sources)
+            {'title': sources[0]['title'], 'url': sources[0]['url'], 'purpose': 'Canonical Python function documentation',
+             'coverage_ids': ['core'], 'kind': 'documentation'}
         ],
     }
 elif agent == 'ResearchSelector':
     candidates = request['context']['candidates']
     response = {'selections': [
         {'url': item['url'], 'kind': sources[index]['kind'], 'reason': f'Coverage reason {index}'}
-        for index, item in enumerate(candidates[:12])
+        for index, item in enumerate(candidates[:request['context']['max_selections']])
     ]}
 elif agent == 'ResearchSynthesis':
     pages = request['context']['pages']
@@ -88,9 +87,19 @@ elif agent == 'ResearchSynthesis':
                 'rationale': f'Verified evidence for curriculum section {index}',
                 'key_points': [f'Concrete mechanism supported by source {index}',
                                f'Worked example or limitation supported by source {index}'],
+                'coverage_evidence': [{'requirement_id': 'core', 'support': 'strong'}],
             }
             for index, page in enumerate(pages)
         ],
+    }
+elif agent == 'ResearchCoverageEvaluator':
+    source = request['context']['sources'][0]
+    response = {
+        'assessments': [{
+            'requirement_id': 'core', 'status': 'covered', 'confidence': 0.98,
+            'supported_by': [source['url']], 'rationale': 'The documentation covers the core mechanism.'
+        }],
+        'sufficient': True, 'reason': 'All requirements are covered.'
     }
 elif agent == 'Planner':
     def paragraphs(label, first_source):
@@ -104,11 +113,11 @@ elif agent == 'Planner':
                     f'that helps the learner revise a precise mental model rather than memorize generic advice.'
                 )
             items.append({'text': ' '.join(sentences),
-                          'source_urls': [sources[first_source]['url'], sources[first_source + 1]['url']]})
+                          'source_urls': [sources[0]['url']]})
         return items
     curriculum = [{'week': 1, 'title': 'Function foundations',
                    'outcomes': ['Define and call a function', 'Validate a result'],
-                   'source_urls': [sources[0]['url'], sources[1]['url']],
+                   'source_urls': [sources[0]['url']],
                    'overview': 'Build a precise mental model of Python functions, then apply it to observable examples.',
                    'estimated_hours': 3,
                    'lessons': [
@@ -116,12 +125,12 @@ elif agent == 'Planner':
                       'objective': 'Explain how parameters bind inputs and return values expose outputs.',
                       'paragraphs': paragraphs('PROVIDER_AUTHORED_CONTENT', 0),
                       'practice': 'Implement double and three related functions, then record inputs, predicted outputs, and actual outputs.',
-                      'estimated_minutes': 60, 'source_urls': [sources[0]['url'], sources[1]['url']]},
+                      'estimated_minutes': 60, 'source_urls': [sources[0]['url']]},
                      {'id': 'provider-functions-validation', 'title': 'Validate function behavior',
                       'objective': 'Use representative and boundary examples to validate a function result.',
                       'paragraphs': paragraphs('PROVIDER_VALIDATION_CONTENT', 1),
                       'practice': 'Write three executable checks for one function and explain what each check demonstrates about its contract.',
-                      'estimated_minutes': 60, 'source_urls': [sources[1]['url'], sources[2]['url']]}
+                      'estimated_minutes': 60, 'source_urls': [sources[0]['url']]}
                    ]}]
     assessment = {
         'quiz_items': [
@@ -210,8 +219,10 @@ def test_fake_browser_and_gemini_executables_generate_complete_course(tmp_path, 
             )
             assert response.status_code == 200, response.text
             course = response.json()
-            assert len(course["research"]["sources"]) == 12
-            assert len(course["research"]["visited_sources"]) == 12
+            assert len(course["research"]["sources"]) == 1
+            assert len(course["research"]["visited_sources"]) == 1
+            assert course["research"]["stop_reason"] == "coverage_satisfied"
+            assert course["research"]["coverage"][0]["status"] == "covered"
             assert course["course"]["modules"][0]["lessons"]
             assert course["course"]["modules"][0]["lessons"][0]["content"].startswith(
                 "PROVIDER_AUTHORED_CONTENT"
@@ -240,21 +251,21 @@ def test_fake_browser_and_gemini_executables_generate_complete_course(tmp_path, 
             assert saved.status_code == 200, saved.text
             saved_course = saved.json()
             assert saved_course["course"]["modules"][0]["lessons"] == course["course"]["modules"][0]["lessons"]
-            assert len(saved_course["research"]["sources"]) == 12
+            assert len(saved_course["research"]["sources"]) == 1
 
             trace = client.get(f"/learning-runs/{course['id']}/trace", headers=learner)
             assert trace.status_code == 200, trace.text
             trace_body = trace.json()
             assert {session["agent_name"] for session in trace_body["sessions"]} == {
                 "BrowserResearch", "ResearchQueryPlanner", "ResearchSelector",
-                "ResearchSynthesisPart1", "ResearchSynthesisPart2", "Planner",
+                "ResearchSynthesisPart1", "ResearchCoverageRound1", "Planner",
             }
             assert all(session["transcript"] for session in trace_body["sessions"])
             researcher_trace = next(
                 session for session in trace_body["sessions"]
                 if session["agent_name"] == "BrowserResearch"
             )
-            assert len(researcher_trace["tool_invocations"]) == 13
+            assert len(researcher_trace["tool_invocations"]) == 1
             assert {
                 page["url"]
                 for tool in researcher_trace["tool_invocations"]

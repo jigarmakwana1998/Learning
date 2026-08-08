@@ -2,6 +2,8 @@ export type User = { id: string; email: string; role: "learner" | "admin" };
 export type TopicIntent = { topic: string; level: "beginner" | "intermediate" | "advanced"; hoursPerWeek: number; weeks: number };
 export type Source = { title: string; url: string; kind: "documentation" | "paper" | "book" | "lecture" | "slides" | "article" | "repository"; rationale: string; key_points?: string[] };
 export type SourceVisit = { url: string; title?: string; status: "discovered" | "read" | "unavailable"; selected: boolean };
+export type ResearchCoverage = { requirement_id: string; question: string; priority: "core" | "supporting"; depth: "overview" | "detailed"; evidence_policy: "single_source_ok" | "corroborate"; status: "covered" | "partial" | "missing"; confidence: number; supported_by: string[]; rationale: string };
+export type ResearchStats = { rounds: number; searches: number; pages_attempted: number; pages_read: number; sources_selected: number };
 
 export type LessonContent = {
   heading?: string;
@@ -37,7 +39,7 @@ type AssignmentPrompt = { title?: string; prompt: string; deliverables?: string[
 export type LearningRun = {
   id: string;
   harness: AgentHarness;
-  research: { topic: string; sources: Source[]; visited_sources?: SourceVisit[] };
+  research: { topic: string; sources: Source[]; visited_sources?: SourceVisit[]; coverage?: ResearchCoverage[]; stop_reason?: "coverage_satisfied" | "budget_exhausted" | "no_new_evidence" | null; warnings?: string[]; research_stats?: ResearchStats };
   // `course` is the richer v2 response. `curriculum` remains supported for existing API responses.
   course?: { title?: string; modules: ApiModule[] };
   curriculum: Array<{ id?: string; week: number; title: string; outcomes: string[]; source_urls: string[]; lessons?: Array<Record<string, unknown>> }>;

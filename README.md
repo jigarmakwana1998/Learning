@@ -92,9 +92,9 @@ Copy `mobile/.env.example` to `mobile/.env`. Set the Supabase Project URL and pu
 
 `POST /learning-runs` runs a real, evidence-gated pipeline:
 
-1. **Research query planner** creates eight complementary discovery queries and canonical seed candidates.
-2. **Browser research** searches public pages, reads exactly twelve candidates, and retains a complete visit ledger.
-3. **Research selector and synthesis** filter the readable evidence into 8-12 verified sources with concrete teaching points.
+1. **Research query planner** derives semantic coverage requirements, focused discovery queries, and optional canonical seeds.
+2. **Adaptive browser research** reads the strongest candidate first, then searches only for remaining evidence gaps while retaining a complete visit ledger.
+3. **Coverage evaluation and synthesis** stop as soon as the requested depth is supported, whether that takes one authoritative source or several complementary sources.
 4. **Planner** creates the complete course, paragraph-level citations, quizzes, answer explanations, assignment, rubric, and project. Invalid or unverified output fails instead of falling back to generic content.
 
 The adapters support Codex, Gemini CLI, and Antigravity CLI as independent harnesses. LiteLLM is not a harness: it is the mandatory model gateway beneath all three. The application requests the stable `agent-model` alias; changing that alias in `infra/litellm/config.yaml` swaps the underlying LLM without changing harness selection. Gemini CLI is retained as requested; Google's current tooling is transitioning it to Antigravity CLI, so Antigravity remains a separate harness. [Google's Antigravity documentation](https://www.antigravity.google/docs/cli-overview) describes the current CLI; [the Gemini CLI transition notice](https://github.com/google-gemini/gemini-cli/discussions/27274) explains the migration.

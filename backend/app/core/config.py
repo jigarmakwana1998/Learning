@@ -30,6 +30,12 @@ class Settings(BaseModel):
     cors_origins: list[str] = Field(default_factory=lambda: [origin.strip() for origin in os.getenv("CORS_ORIGINS", "http://localhost:8081,http://localhost:19006").split(",") if origin.strip()])
     admin_email: str = Field(default_factory=lambda: os.getenv("ADMIN_EMAIL", "admin@example.com"))
     admin_password: str = Field(default_factory=lambda: os.getenv("ADMIN_PASSWORD", "change-me-now"))
+    research_max_searches: int = Field(default_factory=lambda: int(os.getenv("RESEARCH_MAX_SEARCHES", "20")))
+    research_max_pages: int = Field(default_factory=lambda: int(os.getenv("RESEARCH_MAX_PAGES", "40")))
+    research_max_actions: int = Field(default_factory=lambda: int(os.getenv("RESEARCH_MAX_ACTIONS", "60")))
+    research_max_elapsed_seconds: int = Field(
+        default_factory=lambda: int(os.getenv("RESEARCH_MAX_ELAPSED_SECONDS", "600"))
+    )
     local_auth: bool = Field(default_factory=lambda: os.getenv("LOCAL_AUTH", "false").casefold() == "true")
     supabase_url: str | None = Field(default_factory=lambda: None if os.getenv("LOCAL_AUTH", "false").casefold() == "true" else os.getenv("SUPABASE_URL") or None)
     supabase_publishable_key: str | None = Field(default_factory=lambda: None if os.getenv("LOCAL_AUTH", "false").casefold() == "true" else os.getenv("SUPABASE_PUBLISHABLE_KEY") or None)

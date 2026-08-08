@@ -32,19 +32,19 @@ def research_output(sources: list[dict], visited_urls=None) -> AgentResult:
     )
 
 
-def test_accepts_eight_unique_read_sources_and_normalizes_final_urls():
-    sources = [source(index) for index in range(8)]
+def test_accepts_one_read_source_and_normalizes_final_url():
+    sources = [source(0)]
     sources[0]["url"] = "HTTPS://DOCS.EXAMPLE.COM/source-0#overview"
-    visited = ["https://docs.example.com/source-0", *(item["url"] for item in sources[1:])]
+    visited = ["https://docs.example.com/source-0"]
 
     research = LearningService._verified_research(research_output(sources, visited))
 
-    assert len(research.sources) == 8
+    assert len(research.sources) == 1
     assert research.sources[0].url == "https://docs.example.com/source-0"
 
 
 def test_discards_unread_duplicate_and_search_urls_but_keeps_verified_sources():
-    accepted = [source(index) for index in range(8)]
+    accepted = [source(0)]
     rejected = [
         source(20, "https://unread.example.com/article"),
         source(21, accepted[0]["url"] + "#duplicate"),
@@ -57,40 +57,29 @@ def test_discards_unread_duplicate_and_search_urls_but_keeps_verified_sources():
 
     research = LearningService._verified_research(research_output([*accepted, *rejected], visited))
 
-    assert [item.title for item in research.sources] == [f"Source {index}" for index in range(8)]
+    assert [item.title for item in research.sources] == ["Source 0"]
 
 
-def test_caps_verified_sources_at_twelve():
+def test_keeps_all_verified_sources_within_the_browser_safety_budget():
     sources = [source(index) for index in range(15)]
 
     research = LearningService._verified_research(research_output(sources))
 
-    assert len(research.sources) == 12
+    assert len(research.sources) == 15
 
 
-def test_rejects_a_brief_without_the_required_source_mix():
-    sources = [source(index) for index in range(8)]
+def test_accepts_a_single_authoritative_source_kind():
+    sources = [source(index) for index in range(3)]
     for item in sources:
         item["kind"] = "documentation"
 
-    with pytest.raises(ValueError, match="primary, practical, and explanatory"):
-        LearningService._verified_research(research_output(sources))
+    research = LearningService._verified_research(research_output(sources))
+    assert len(research.sources) == 3
 
 
-@pytest.mark.parametrize(
-    "sources,visited",
-    [
-        ([source(index) for index in range(8)], []),
-        ([source(index) for index in range(7)], None),
-        (
-            [source(index, "https://docs.example.com/same") for index in range(8)],
-            ["https://docs.example.com/same"],
-        ),
-    ],
-)
-def test_fails_clearly_when_fewer_than_eight_unique_sources_were_read(sources, visited):
-    with pytest.raises(ValueError, match="at least 8 unique browser-verified sources"):
-        LearningService._verified_research(research_output(sources, visited))
+def test_returns_no_sources_when_no_citation_was_browser_verified():
+    research = LearningService._verified_research(research_output([source(0)], []))
+    assert research.sources == []
 
 
 @pytest.mark.asyncio
@@ -128,12 +117,12 @@ async def test_create_run_stops_before_planning_when_research_evidence_is_insuff
     service = LearningService()
 
     async def fail_research(*_args):
-        raise ValueError("Browser research requires at least 8 unique browser-verified sources")
+        raise ValueError("No verified evidence supports the requested topic.")
 
     monkeypatch.setattr(service, "_browser_research", fail_research)
     db = FakeDb()
 
-    with pytest.raises(ValueError, match="at least 8 unique browser-verified sources"):
+    with pytest.raises(ValueError, match="No verified evidence"):
         await service.create_run(
             db,
             SimpleNamespace(id="learner"),
@@ -156,8 +145,8 @@ async def test_create_run_stops_before_planning_when_research_evidence_is_insuff
     ],
 )
 def test_rejects_malformed_or_non_https_citations(url):
-    sources = [source(index) for index in range(7)] + [source(8, url)]
+    sources = [source(0), source(8, url)]
     visited = [item["url"] for item in sources]
 
-    with pytest.raises(ValueError, match="received 7"):
-        LearningService._verified_research(research_output(sources, visited))
+    research = LearningService._verified_research(research_output(sources, visited))
+    assert [item.url for item in research.sources] == [source(0)["url"]]

@@ -16,6 +16,7 @@ class LessonWriterAgent(LearningAgent):
             "the mechanism step by step, connect it to the wider architecture, give a concrete worked example, and discuss "
             "limitations or current practice where relevant. Use the draft only as an outline; expand it with the supplied "
             "source key points without repeating sentences or the learner prompt. Every paragraph must carry 1-3 exact "
-            "source_urls that directly support it, and the lesson must synthesize at least two sources. Copy URLs exactly "
+            "source_urls that directly support it. Use multiple sources when they add complementary evidence, but do not add a "
+            "second citation merely for diversity when one authoritative source covers the lesson. Copy URLs exactly "
             "from verified_sources. Never invent, shorten, or rewrite a URL and never add unsupported facts."
         )

@@ -3,8 +3,8 @@ import json
 import pytest
 
 from app.agents import (
-    ExaminerAgent, PlannerAgent, ResearcherAgent, ResearchSelectorAgent,
-    ResearchSynthesisAgent,
+    ExaminerAgent, PlannerAgent, ResearchCoverageEvaluatorAgent,
+    ResearchQueryPlannerAgent, ResearchSelectorAgent, ResearchSynthesisAgent,
 )
 from app.schemas.learning import LearningGoal
 from app.mcp.tools import LEARNING_TOOLS, RESEARCH_TOOLS
@@ -13,9 +13,10 @@ from app.mcp.tools import LEARNING_TOOLS, RESEARCH_TOOLS
 @pytest.mark.parametrize(
     "agent",
     [
-        ResearcherAgent(),
+        ResearchQueryPlannerAgent(),
         ResearchSelectorAgent(),
         ResearchSynthesisAgent(),
+        ResearchCoverageEvaluatorAgent(),
         PlannerAgent(),
         ExaminerAgent(),
     ],

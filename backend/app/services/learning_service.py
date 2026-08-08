@@ -1,5 +1,4 @@
 import ipaddress
-import asyncio
 import json
 import re
 from collections import Counter
@@ -11,8 +10,8 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.agents import (
-    LessonWriterAgent, PlannerAgent, ResearchQueryPlannerAgent, ResearchSelectorAgent,
-    ResearchSynthesisAgent,
+    LessonWriterAgent, PlannerAgent, ResearchCoverageEvaluatorAgent,
+    ResearchQueryPlannerAgent, ResearchSelectorAgent, ResearchSynthesisAgent,
 )
 from app.browser.gateway import BrowserGateway
 from app.core.config import get_settings
@@ -156,8 +155,9 @@ class LearningService:
         harness: str,
         goal: LearningGoal,
     ) -> tuple[AgentSessionRecord, ResearchBrief]:
-        """Plan broad discovery, browse public pages, then synthesize verified evidence."""
+        """Browse until semantic coverage is complete or a safety boundary is reached."""
         gateway = self.browser_gateway_factory()
+        settings = get_settings()
         audit_session = AgentSessionRecord(
             agent_run_id=run_id,
             agent_name="BrowserResearch",
@@ -185,45 +185,79 @@ class LearningService:
                 query_planner.name,
                 query_planner.build_prompt(goal),
             )
-            queries, replacement_queries, seed_candidates = self._validated_query_plan(
-                query_output
-            )
-            candidates: list[dict[str, str]] = []
-            seen_candidates: set[str] = set()
-
-            async def run_search(item: dict[str, str]) -> tuple[dict[str, str], dict, float]:
-                call_started = perf_counter()
-                result = await gateway.browser_search(item["query"], limit=10)
-                result["purpose"] = item["purpose"]
-                return item, result, call_started
-
-            search_results = await asyncio.gather(*(run_search(item) for item in queries))
-            for _item, result, call_started in search_results:
-                await self._audit_browser_call(
-                    db, run_id, audit_session.id, "browser_search", result, call_started
+            try:
+                requirements, queries, seed_candidates = self._validated_query_plan(
+                    query_output, goal
                 )
-                for item in result.get("results", []):
-                    if not isinstance(item, dict):
-                        continue
-                    normalized = self._normalize_evidence_url(item.get("url"))
-                    if (
-                        normalized is None
-                        or normalized in seen_candidates
-                        or self._is_search_results_url(normalized)
-                    ):
-                        continue
-                    seen_candidates.add(normalized)
-                    candidates.append(
-                        {"title": str(item.get("title") or "Public source")[:300], "url": normalized}
+            except ValueError as plan_error:
+                try:
+                    _, repaired_output = await self._plain_research_call(
+                        db,
+                        run_id,
+                        harness,
+                        query_planner.name,
+                        query_planner.build_prompt(
+                            goal,
+                            {"repair": str(plan_error), "previous_output": query_output},
+                        ),
                     )
-            if len(candidates) < 12:
-                replacement_results = await asyncio.gather(
-                    *(run_search(item) for item in replacement_queries)
-                )
-                for _item, result, call_started in replacement_results:
+                    requirements, queries, seed_candidates = self._validated_query_plan(
+                        repaired_output, goal, allow_fallback=True
+                    )
+                except Exception:
+                    requirements, queries, seed_candidates = self._fallback_query_plan(goal)
+
+            candidates: list[dict[str, object]] = list(seed_candidates)
+            seen_candidates = {item["url"] for item in candidates}
+            consumed_candidates: set[str] = set()
+            query_queue = list(queries)
+            seen_queries: set[str] = set()
+            kind_hints: dict[str, str] = {}
+            synthesized_by_url: dict[str, dict] = {}
+            evidence_by_requirement: dict[str, dict[str, str]] = {
+                item["id"]: {} for item in requirements
+            }
+            seen_pages: set[str] = set()
+            visit_ledger: list[SourceVisit] = []
+            synthesis = ResearchSynthesisAgent()
+            evaluator = ResearchCoverageEvaluatorAgent()
+            selector = ResearchSelectorAgent()
+            synthesis_sessions: list[AgentSessionRecord] = []
+            coverage = self._default_coverage(requirements)
+            searches = pages_attempted = pages_read = rounds = 0
+            stop_reason = "no_new_evidence"
+
+            while True:
+                if pages_attempted >= settings.research_max_pages:
+                    stop_reason = "budget_exhausted"
+                    break
+
+                available = [item for item in candidates if item["url"] not in consumed_candidates]
+                if not available:
+                    if searches >= settings.research_max_searches:
+                        stop_reason = "budget_exhausted"
+                        break
+                    query_item = next(
+                        (
+                            item for item in query_queue
+                            if item["query"].casefold() not in seen_queries
+                        ),
+                        None,
+                    )
+                    if query_item is None:
+                        stop_reason = "no_new_evidence"
+                        break
+                    seen_queries.add(query_item["query"].casefold())
+                    call_started = perf_counter()
+                    result = await gateway.browser_search(query_item["query"], limit=10)
+                    searches += 1
+                    result["purpose"] = query_item["purpose"]
                     await self._audit_browser_call(
                         db, run_id, audit_session.id, "browser_search", result, call_started
                     )
+                    if result.get("error", {}).get("code") == "quota_exceeded":
+                        stop_reason = "budget_exhausted"
+                        break
                     for item in result.get("results", []):
                         if not isinstance(item, dict):
                             continue
@@ -235,81 +269,59 @@ class LearningService:
                         ):
                             continue
                         seen_candidates.add(normalized)
-                        candidates.append(
-                            {
-                                "title": str(item.get("title") or "Public source")[:300],
-                                "url": normalized,
-                            }
-                        )
-            for item in seed_candidates:
-                normalized = self._normalize_evidence_url(item["url"])
-                if (
-                    normalized is None
-                    or normalized in seen_candidates
-                    or self._is_search_results_url(normalized)
-                ):
+                        candidate: dict[str, object] = {
+                            "title": str(item.get("title") or "Public source")[:300],
+                            "url": normalized,
+                            "coverage_ids": query_item["coverage_ids"],
+                        }
+                        if kind_hint := self._source_kind_hint(str(candidate["title"]), normalized):
+                            candidate["kind_hint"] = kind_hint
+                        candidates.append(candidate)
                     continue
-                seen_candidates.add(normalized)
-                candidate = {"title": item["title"], "url": normalized, "is_canonical_seed": "true"}
-                if kind_hint := item.get("kind_hint") or self._source_kind_hint(item["title"], normalized):
-                    candidate["kind_hint"] = kind_hint
-                candidates.append(candidate)
-            if len(candidates) < 12:
-                raise ValueError(
-                    "Research discovery remained too narrow after eight parallel queries and two "
-                    f"replacement queries; received {len(candidates)} unique public candidates."
+
+                unresolved = [item for item in coverage if item["status"] != "covered"]
+                max_selections = min(
+                    1 if rounds == 0 else 4,
+                    settings.research_max_pages - pages_attempted,
+                    len(available),
                 )
-
-            selector = ResearchSelectorAgent()
-            # Search pages can be noisy, especially when DuckDuckGo falls back to
-            # Bing. Always expose the model-planned canonical candidates first,
-            # followed by diverse discovered results. Every chosen URL still has
-            # to be opened and verified by the browser before it can be cited.
-            candidate_by_url = {item["url"]: item for item in candidates}
-            selector_candidates: list[dict[str, str]] = []
-            seed_urls: set[str] = set()
-            for seed in seed_candidates:
-                normalized = self._normalize_evidence_url(seed["url"])
-                candidate = candidate_by_url.get(normalized)
-                if normalized is None or candidate is None:
-                    continue
-                seed_urls.add(normalized)
-                candidate["is_canonical_seed"] = "true"
-                if kind_hint := seed.get("kind_hint") or self._source_kind_hint(seed["title"], normalized):
-                    candidate["kind_hint"] = kind_hint
-                selector_candidates.append(candidate)
-            selector_candidates.extend(
-                item for item in candidates if item["url"] not in seed_urls
-            )
-            selector_session, selector_output = await self._plain_research_call(
-                db,
-                run_id,
-                harness,
-                selector.name,
-                selector.build_prompt(goal, {"candidates": selector_candidates[:40]}),
-            )
-            selections = self._validated_research_selections(
-                selector_output, selector_candidates[:40]
-            )
-            selected_urls = [item["url"] for item in selections]
-            ordered_urls = selected_urls
-            kind_hints = {item["url"]: item["kind"] for item in selections}
-
-            pages: list[dict[str, object]] = []
-            seen_pages: set[str] = set()
-            visit_ledger: list[SourceVisit] = []
-
-            async def run_read(batch: list[str]) -> tuple[dict, float]:
+                selector_output: dict = {}
+                try:
+                    _, selector_output = await self._plain_research_call(
+                        db,
+                        run_id,
+                        harness,
+                        selector.name,
+                        selector.build_prompt(
+                            goal,
+                            {
+                                "candidates": available[:40],
+                                "unresolved_coverage": unresolved,
+                                "max_selections": max_selections,
+                            },
+                        ),
+                    )
+                except Exception:
+                    selector_output = {}
+                selections = self._validated_research_selections(
+                    selector_output, available[:40], max_selections
+                )
+                if not selections:
+                    stop_reason = "no_new_evidence"
+                    break
+                selected_urls = [item["url"] for item in selections]
+                consumed_candidates.update(selected_urls)
+                kind_hints.update({item["url"]: item["kind"] for item in selections})
                 call_started = perf_counter()
-                result = await gateway.browser_read(batch)
-                return result, call_started
-
-            batches = [ordered_urls[offset : offset + 4] for offset in range(0, len(ordered_urls), 4)]
-            read_results = await asyncio.gather(*(run_read(batch) for batch in batches))
-            for result, call_started in read_results:
+                result = await gateway.browser_read(selected_urls)
+                pages_attempted += len(selected_urls)
                 await self._audit_browser_call(
                     db, run_id, audit_session.id, "browser_read", result, call_started
                 )
+                if result.get("error", {}).get("code") == "quota_exceeded":
+                    stop_reason = "budget_exhausted"
+                    break
+                page_batch: list[dict[str, object]] = []
                 for page in result.get("pages", []):
                     if not isinstance(page, dict):
                         continue
@@ -323,46 +335,70 @@ class LearningService:
                     if normalized is None or normalized in seen_pages or not content.strip():
                         continue
                     seen_pages.add(normalized)
+                    pages_read += 1
                     title = str(page.get("title") or "Public source")[:500]
                     visit_ledger.append(SourceVisit(url=normalized, title=title, status="read"))
-                    pages.append(
+                    page_batch.append(
                         {
                             "url": normalized,
                             "title": title,
-                            "kind_hint": kind_hints.get(normalized),
+                            "kind_hint": kind_hints.get(requested or normalized),
                             "content": content,
                             "content_is_untrusted": True,
                         }
                     )
-            if len(pages) < 8:
-                raise ValueError(
-                    f"Browser research requires 8 readable public sources; received {len(pages)}."
-                )
+                if not page_batch:
+                    continue
 
-            synthesis = ResearchSynthesisAgent()
-            synthesis_sessions: list[AgentSessionRecord] = []
-            synthesized_sources: list[dict] = []
-            for index, page_batch in enumerate(
-                (pages[offset : offset + 6] for offset in range(0, len(pages), 6)),
-                start=1,
-            ):
+                rounds += 1
                 part_session, part_output = await self._plain_research_call(
                     db,
                     run_id,
                     harness,
-                    f"ResearchSynthesisPart{index}",
-                    synthesis.build_prompt(goal, {"pages": page_batch}),
+                    f"ResearchSynthesisPart{rounds}",
+                    synthesis.build_prompt(
+                        goal,
+                        {"pages": page_batch, "coverage_requirements": requirements},
+                    ),
                 )
                 synthesis_sessions.append(part_session)
-                synthesized_sources.extend(
-                    source for source in part_output.get("sources", [])
-                    if isinstance(source, dict)
+                self._merge_synthesized_evidence(
+                    part_output,
+                    requirements,
+                    seen_pages,
+                    synthesized_by_url,
+                    evidence_by_requirement,
                 )
-            synthesis_session = synthesis_sessions[0]
-            synthesis_output = {"topic": goal.topic, "sources": synthesized_sources}
-            for source in synthesis_output.get("sources", []):
-                if not isinstance(source, dict):
-                    continue
+                try:
+                    _, coverage_output = await self._plain_research_call(
+                        db,
+                        run_id,
+                        harness,
+                        f"ResearchCoverageRound{rounds}",
+                        evaluator.build_prompt(
+                            goal,
+                            {
+                                "coverage_requirements": requirements,
+                                "sources": list(synthesized_by_url.values()),
+                            },
+                        ),
+                    )
+                except Exception:
+                    coverage_output = {}
+                coverage, next_queries = self._validated_coverage_assessments(
+                    coverage_output, requirements, evidence_by_requirement
+                )
+                existing_queries = {item["query"].casefold() for item in query_queue}
+                for item in next_queries:
+                    if item["query"].casefold() not in existing_queries:
+                        query_queue.insert(0, item)
+                        existing_queries.add(item["query"].casefold())
+                if all(item["status"] == "covered" for item in coverage):
+                    stop_reason = "coverage_satisfied"
+                    break
+
+            synthesis_output = {"topic": goal.topic, "sources": list(synthesized_by_url.values())}
+            for source in synthesis_output["sources"]:
                 normalized = self._normalize_evidence_url(source.get("url"))
                 if normalized in kind_hints:
                     source["kind"] = kind_hints[normalized]
@@ -371,29 +407,55 @@ class LearningService:
             research = self._verified_research(
                 AgentResult(synthesis_output, visited_urls=frozenset(seen_pages))
             )
+            core_supported = any(
+                item["priority"] == "core" and item["status"] in {"covered", "partial"}
+                for item in coverage
+            )
+            if not research.sources or not core_supported:
+                raise ValueError("No verified evidence supports the requested topic.")
             selected = {source.url for source in research.sources}
-            research = research.model_copy(
-                update={
+            warnings = [
+                f"{item['question']} ({item['status']})"
+                for item in coverage if item["status"] != "covered"
+            ]
+            research = ResearchBrief.model_validate(
+                {
+                    **research.model_dump(mode="json"),
                     "visited_sources": [
                         visit.model_copy(update={"selected": visit.url in selected})
                         for visit in visit_ledger
-                    ]
+                    ],
+                    "coverage": coverage,
+                    "stop_reason": stop_reason,
+                    "warnings": warnings,
+                    "research_stats": {
+                        "rounds": rounds,
+                        "searches": searches,
+                        "pages_attempted": pages_attempted,
+                        "pages_read": pages_read,
+                        "sources_selected": len(research.sources),
+                    },
                 }
             )
+            synthesis_session = synthesis_sessions[0]
             audit_session.status = "completed"
             audit_session.output_payload = {
                 "candidate_count": len(candidates),
-                "selected_count": len(selections),
-                "read_count": len(pages),
+                "selected_count": len(research.sources),
+                "read_count": pages_read,
+                "round_count": rounds,
+                "search_count": searches,
+                "stop_reason": stop_reason,
                 "query_planner_session_id": query_session.id,
-                "selector_session_id": selector_session.id,
                 "synthesis_session_ids": [session.id for session in synthesis_sessions],
             }
             self._add_transcript_entry(
                 db,
                 audit_session.id,
                 "system",
-                f"Completed {len(queries)} parallel research queries, selected 12 candidates, and read {len(pages)} public pages. Page bodies are not persisted.",
+                f"Adaptive research stopped with {stop_reason} after {searches} searches, "
+                f"{pages_read} readable pages, and {len(research.sources)} grounded sources. "
+                "Page bodies are not persisted.",
                 1,
             )
             await record_trace_event(
@@ -435,53 +497,101 @@ class LearningService:
         role: str,
         prompt: str,
     ) -> tuple[AgentSessionRecord, dict]:
-        """Run every research model decision through the traced harness boundary."""
-        return await AgentHarness(harness, db).start_and_run(run_id, role, prompt)
+        """Run research through the traced harness without persisting page bodies."""
+        redacted_inputs = {
+            "ResearchQueryPlanner": "Planned semantic coverage requirements and optional discovery paths.",
+            "ResearchSelector": "Selected public source candidates from normalized URLs.",
+        }
+        redacted_input = redacted_inputs.get(role)
+        if redacted_input is None and role.startswith("ResearchSynthesisPart"):
+            redacted_input = (
+                "Synthesized one bounded batch of browser-read evidence. Page bodies were supplied "
+                "in memory and omitted from durable traces."
+            )
+        redacted_input = redacted_input or "Processed bounded research evidence."
+        return await AgentHarness(harness, db).start_and_run(
+            run_id,
+            role,
+            prompt,
+            persisted_prompt=redacted_input,
+        )
 
     @classmethod
     def _validated_query_plan(
         cls,
         output: dict,
-    ) -> tuple[list[dict[str, str]], list[dict[str, str]], list[dict[str, str]]]:
+        goal: LearningGoal,
+        *,
+        allow_fallback: bool = False,
+    ) -> tuple[list[dict[str, object]], list[dict[str, object]], list[dict[str, object]]]:
         if not isinstance(output, dict):
-            raise ValueError("ResearchQueryPlanner must return a JSON object.")  # noqa: TRY004
+            if allow_fallback:
+                return cls._fallback_query_plan(goal)
+            raise ValueError("ResearchQueryPlanner returned an invalid research plan.")
 
-        def validate_queries(key: str, expected: int) -> list[dict[str, str]]:
-            items = output.get(key)
-            if not isinstance(items, list) or len(items) != expected:
-                raise ValueError(
-                    f"ResearchQueryPlanner must return exactly {expected} {key}."
-                )
-            validated: list[dict[str, str]] = []
-            seen: set[str] = set()
-            for item in items:
+        raw_requirements = output.get("coverage_requirements")
+        requirements: list[dict[str, object]] = []
+        seen_ids: set[str] = set()
+        if isinstance(raw_requirements, list):
+            for index, item in enumerate(raw_requirements, start=1):
                 if not isinstance(item, dict):
-                    raise ValueError("ResearchQueryPlanner returned an invalid query item.")  # noqa: TRY004
-                query = " ".join(str(item.get("query") or "").split())
-                purpose = " ".join(str(item.get("purpose") or "").split())
-                normalized = query.casefold()
-                if (
-                    not 8 <= len(query) <= 300
-                    or not 8 <= len(purpose) <= 300
-                    or normalized in seen
-                ):
-                    raise ValueError("ResearchQueryPlanner queries must be unique and specific.")
-                seen.add(normalized)
-                validated.append({"query": query, "purpose": purpose})
-            return validated
+                    continue
+                requirement_id = re.sub(
+                    r"[^a-z0-9_-]+", "-", str(item.get("id") or f"requirement-{index}").casefold()
+                ).strip("-")[:80]
+                question = " ".join(str(item.get("question") or "").split())[:500]
+                if not requirement_id or requirement_id in seen_ids or len(question) < 8:
+                    continue
+                seen_ids.add(requirement_id)
+                requirements.append(
+                    {
+                        "id": requirement_id,
+                        "question": question,
+                        "priority": item.get("priority") if item.get("priority") in {"core", "supporting"} else "core",
+                        "depth": item.get("depth") if item.get("depth") in {"overview", "detailed"} else "detailed",
+                        "evidence_policy": item.get("evidence_policy")
+                        if item.get("evidence_policy") in {"single_source_ok", "corroborate"}
+                        else "single_source_ok",
+                    }
+                )
+        if not requirements:
+            if allow_fallback:
+                return cls._fallback_query_plan(goal)
+            raise ValueError("ResearchQueryPlanner did not define usable coverage requirements.")
+        if not any(item["priority"] == "core" for item in requirements):
+            requirements[0]["priority"] = "core"
+        allowed_ids = {str(item["id"]) for item in requirements}
+        default_coverage = [str(next(item["id"] for item in requirements if item["priority"] == "core"))]
 
-        queries = validate_queries("queries", 8)
-        replacement_queries = validate_queries("replacement_queries", 2)
-        all_queries = {item["query"].casefold() for item in queries}
-        if any(item["query"].casefold() in all_queries for item in replacement_queries):
-            raise ValueError("ResearchQueryPlanner replacement queries must be distinct.")
+        queries: list[dict[str, object]] = []
+        seen_queries: set[str] = set()
+        raw_queries = output.get("queries")
+        if isinstance(raw_queries, list):
+            for item in raw_queries:
+                if not isinstance(item, dict):
+                    continue
+                query = " ".join(str(item.get("query") or "").split())[:300]
+                purpose = " ".join(str(item.get("purpose") or "").split())[:300]
+                normalized = query.casefold()
+                if len(query) < 3 or normalized in seen_queries:
+                    continue
+                seen_queries.add(normalized)
+                coverage_ids = [
+                    str(value) for value in item.get("coverage_ids", [])
+                    if str(value) in allowed_ids
+                ] or default_coverage
+                queries.append(
+                    {
+                        "query": query,
+                        "purpose": purpose or "Close a research coverage gap",
+                        "coverage_ids": coverage_ids,
+                    }
+                )
 
         raw_seeds = output.get("seed_candidates")
-        if not isinstance(raw_seeds, list) or not 8 <= len(raw_seeds) <= 12:
-            raise ValueError("ResearchQueryPlanner must propose 8-12 canonical seed candidates.")
-        seeds: list[dict[str, str]] = []
+        seeds: list[dict[str, object]] = []
         seen_urls: set[str] = set()
-        for item in raw_seeds:
+        for item in raw_seeds if isinstance(raw_seeds, list) else []:
             if not isinstance(item, dict):
                 continue
             normalized = cls._normalize_evidence_url(item.get("url"))
@@ -491,7 +601,6 @@ class LearningService:
                 normalized is None
                 or normalized in seen_urls
                 or cls._is_search_results_url(normalized)
-                or len(purpose) < 8
             ):
                 continue
             seen_urls.add(normalized)
@@ -499,29 +608,64 @@ class LearningService:
             kind_hint = declared_kind if declared_kind in {
                 "documentation", "paper", "book", "lecture", "slides", "article", "repository"
             } else cls._source_kind_hint(title, normalized)
-            seed = {"title": title, "url": normalized, "purpose": purpose}
+            coverage_ids = [
+                str(value) for value in item.get("coverage_ids", [])
+                if str(value) in allowed_ids
+            ] or default_coverage
+            seed: dict[str, object] = {
+                "title": title,
+                "url": normalized,
+                "purpose": purpose,
+                "coverage_ids": coverage_ids,
+                "is_canonical_seed": "true",
+            }
             if kind_hint:
                 seed["kind_hint"] = kind_hint
             seeds.append(seed)
-        if len(seeds) < 8:
-            raise ValueError("ResearchQueryPlanner must provide at least 8 valid HTTPS seed URLs.")
-        return queries, replacement_queries, seeds
+        if not queries and not seeds:
+            if allow_fallback:
+                return cls._fallback_query_plan(goal, requirements)
+            raise ValueError("ResearchQueryPlanner did not provide a usable discovery path.")
+        return requirements, queries, seeds
+
+    @classmethod
+    def _fallback_query_plan(
+        cls,
+        goal: LearningGoal,
+        requirements: list[dict[str, object]] | None = None,
+    ) -> tuple[list[dict[str, object]], list[dict[str, object]], list[dict[str, object]]]:
+        requirements = requirements or [
+            {
+                "id": "core-topic",
+                "question": f"What must a {goal.level} learner understand and apply about {goal.topic}?",
+                "priority": "core",
+                "depth": "detailed" if goal.weeks > 1 else "overview",
+                "evidence_policy": "single_source_ok",
+            }
+        ]
+        core_id = str(next((item["id"] for item in requirements if item["priority"] == "core"), requirements[0]["id"]))
+        return requirements, [
+            {
+                "query": f"{goal.topic} authoritative guide {goal.level}",
+                "purpose": "Find authoritative evidence for the core learning objective",
+                "coverage_ids": [core_id],
+            }
+        ], []
 
     @classmethod
     def _validated_research_selections(
         cls,
         output: dict,
-        candidates: list[dict[str, str]],
+        candidates: list[dict[str, object]],
+        max_count: int,
     ) -> list[dict[str, str]]:
         selections = output.get("selections") if isinstance(output, dict) else None
-        if not isinstance(selections, list) or len(selections) != 12:
-            raise ValueError("ResearchSelector must choose exactly 12 candidates.")
         candidate_by_url = {item["url"]: item for item in candidates}
         allowed_urls = set(candidate_by_url)
         allowed_kinds = {"documentation", "paper", "book", "lecture", "slides", "article", "repository"}
         validated: list[dict[str, str]] = []
         seen: set[str] = set()
-        for item in selections:
+        for item in selections if isinstance(selections, list) else []:
             if not isinstance(item, dict):
                 continue
             normalized = cls._normalize_evidence_url(item.get("url") or item.get("requested_url"))
@@ -530,8 +674,10 @@ class LearningService:
                 continue
             seen.add(normalized)
             validated.append({"url": normalized, "kind": kind})
+            if len(validated) == max_count:
+                break
         for candidate in candidates:
-            if len(validated) == 12:
+            if len(validated) == max_count:
                 break
             normalized = candidate["url"]
             if normalized in seen:
@@ -541,50 +687,142 @@ class LearningService:
             ) or "article"
             seen.add(normalized)
             validated.append({"url": normalized, "kind": kind})
-        if len(validated) != 12:
-            raise ValueError("ResearchSelector did not yield 12 unique valid candidates.")
-        return cls._ensure_source_mix(validated, candidates)
+        return validated
 
     @classmethod
-    def _ensure_source_mix(
+    def _default_coverage(
         cls,
-        selections: list[dict[str, str]],
-        candidates: list[dict[str, str]],
-    ) -> list[dict[str, str]]:
-        """Repair only source-type omissions using canonical typed candidates."""
-        repaired = list(selections)
-        selected_urls = {item["url"] for item in repaired}
-        requirements = [
-            {"paper", "book"}, {"documentation", "repository"}, {"article"},
+        requirements: list[dict[str, object]],
+    ) -> list[dict[str, object]]:
+        return [
+            {
+                "requirement_id": item["id"],
+                "question": item["question"],
+                "priority": item["priority"],
+                "depth": item["depth"],
+                "evidence_policy": item["evidence_policy"],
+                "status": "missing",
+                "confidence": 0.0,
+                "supported_by": [],
+                "rationale": "No verified evidence has been read yet.",
+            }
+            for item in requirements
         ]
-        for required in requirements:
-            if any(item["kind"] in required for item in repaired):
+
+    @classmethod
+    def _merge_synthesized_evidence(
+        cls,
+        output: dict,
+        requirements: list[dict[str, object]],
+        visited_urls: set[str],
+        sources_by_url: dict[str, dict],
+        evidence_by_requirement: dict[str, dict[str, str]],
+    ) -> None:
+        allowed_ids = {str(item["id"]) for item in requirements}
+        sources = output.get("sources") if isinstance(output, dict) else None
+        for source in sources if isinstance(sources, list) else []:
+            if not isinstance(source, dict):
                 continue
-            replacement = next(
-                (
-                    {"url": item["url"], "kind": item["kind_hint"]}
-                    for item in candidates
-                    if item.get("kind_hint") in required and item["url"] not in selected_urls
-                ),
-                None,
+            normalized = cls._normalize_evidence_url(source.get("url"))
+            if normalized is None or normalized not in visited_urls:
+                continue
+            key_points = [
+                " ".join(str(point).split()) for point in source.get("key_points", [])
+                if len(" ".join(str(point).split())) >= 20
+            ][:8]
+            if not key_points:
+                continue
+            normalized_source = dict(source)
+            normalized_source["url"] = normalized
+            normalized_source["key_points"] = key_points
+            sources_by_url[normalized] = normalized_source
+            coverage_evidence = source.get("coverage_evidence")
+            for item in coverage_evidence if isinstance(coverage_evidence, list) else []:
+                if not isinstance(item, dict):
+                    continue
+                requirement_id = str(item.get("requirement_id") or "")
+                support = item.get("support")
+                if requirement_id in allowed_ids and support in {"strong", "partial"}:
+                    previous = evidence_by_requirement[requirement_id].get(normalized)
+                    if previous != "strong":
+                        evidence_by_requirement[requirement_id][normalized] = support
+
+    @classmethod
+    def _validated_coverage_assessments(
+        cls,
+        output: dict,
+        requirements: list[dict[str, object]],
+        evidence_by_requirement: dict[str, dict[str, str]],
+    ) -> tuple[list[dict[str, object]], list[dict[str, object]]]:
+        raw_items = output.get("assessments") if isinstance(output, dict) else None
+        raw_by_id = {
+            str(item.get("requirement_id")): item
+            for item in (raw_items if isinstance(raw_items, list) else [])
+            if isinstance(item, dict)
+        }
+        coverage: list[dict[str, object]] = []
+        next_queries: list[dict[str, object]] = []
+        for requirement in requirements:
+            requirement_id = str(requirement["id"])
+            raw = raw_by_id.get(requirement_id, {})
+            linked = evidence_by_requirement.get(requirement_id, {})
+            requested_urls = raw.get("supported_by") if isinstance(raw, dict) else []
+            supported_by = [
+                normalized
+                for value in (requested_urls if isinstance(requested_urls, list) else [])
+                if (normalized := cls._normalize_evidence_url(value)) in linked
+            ]
+            if not supported_by and not raw:
+                supported_by = list(linked)
+            hosts = {urlsplit(url).hostname for url in supported_by}
+            strong_enough = any(linked.get(url) == "strong" for url in supported_by)
+            evidence_policy = str(requirement["evidence_policy"])
+            policy_met = strong_enough and (
+                evidence_policy == "single_source_ok" or len(hosts) >= 2
             )
-            if replacement is None:
-                label = " or ".join(sorted(required))
-                raise ValueError(f"ResearchSelector source mix is incomplete; missing: {label}")
-            counts = Counter(item["kind"] for item in repaired)
-            replace_at = next(
-                (
-                    index for index in range(len(repaired) - 1, -1, -1)
-                    if counts[repaired[index]["kind"]] > 1
-                ),
-                None,
+            raw_status = raw.get("status") if isinstance(raw, dict) else None
+            if policy_met and raw_status in {None, "covered"}:
+                status = "covered"
+            elif supported_by:
+                status = "partial"
+            else:
+                status = "missing"
+            try:
+                default_confidence = 0.8 if status == "covered" else 0.4 if status == "partial" else 0
+                confidence = min(
+                    1.0,
+                    max(0.0, float(raw.get("confidence", default_confidence))),
+                )
+            except (TypeError, ValueError):
+                confidence = 0.0
+            rationale = " ".join(str(raw.get("rationale") or "").split())[:1000]
+            coverage.append(
+                {
+                    "requirement_id": requirement_id,
+                    "question": requirement["question"],
+                    "priority": requirement["priority"],
+                    "depth": requirement["depth"],
+                    "evidence_policy": evidence_policy,
+                    "status": status,
+                    "confidence": confidence,
+                    "supported_by": supported_by,
+                    "rationale": rationale or (
+                        "Verified evidence covers this requirement."
+                        if status == "covered"
+                        else "More evidence is needed."
+                    ),
+                }
             )
-            if replace_at is None:
-                raise ValueError("ResearchSelector source mix could not be balanced.")
-            selected_urls.remove(repaired[replace_at]["url"])
-            repaired[replace_at] = replacement
-            selected_urls.add(replacement["url"])
-        return repaired
+            next_query = " ".join(str(raw.get("next_query") or "").split())[:300]
+            if status != "covered" and len(next_query) >= 3:
+                next_queries.append(
+                    {
+                        "query": next_query,
+                        "purpose": f"Close coverage gap: {requirement['question']}",
+                        "coverage_ids": [requirement_id],
+                    }
+                )
+        return coverage, next_queries
 
     @staticmethod
     def _source_kind_hint(title: str, url: str) -> str | None:
@@ -715,28 +953,9 @@ class LearningService:
                 continue
             seen.add(normalized)
             key_points = [point.strip() for point in source.key_points if point.strip()]
-            if len(key_points) < 2 or any(len(point) < 20 for point in key_points):
+            if not key_points or any(len(point) < 20 for point in key_points):
                 continue
             verified.append(source.model_copy(update={"url": normalized, "key_points": key_points}))
-            if len(verified) == 12:
-                break
-        if len(verified) < 8:
-            raise ValueError(
-                "Research requires at least 8 unique browser-verified sources; "
-                f"received {len(verified)}. Run browser_read on every source before citing it."
-            )
-        kinds = {source.kind for source in verified}
-        source_groups = [
-            ({"paper", "book"}, "a paper or book"),
-            ({"documentation", "repository"}, "documentation or a repository"),
-            ({"article"}, "an explanatory article"),
-        ]
-        missing_groups = [label for group, label in source_groups if not kinds.intersection(group)]
-        if missing_groups:
-            raise ValueError(
-                "Research must include primary, practical, and explanatory evidence; "
-                f"missing: {', '.join(missing_groups)}."
-            )
         selected = {source.url for source in verified}
         discovered: list[str] = []
         unavailable: list[str] = []
@@ -803,13 +1022,6 @@ class LearningService:
             module_urls = cls._grounded_source_urls(
                 module.source_urls, verified_urls, f"module week {module.week}"
             )
-            if not any(
-                verified_sources[url].kind in {"documentation", "paper", "book"}
-                for url in module_urls
-            ):
-                raise ValueError(
-                    f"Planner module week {module.week} must cite a verified primary source."
-                )
             if len(module.lessons) < 2:
                 raise ValueError(
                     f"Planner module week {module.week} must contain at least two complete lessons."
@@ -832,10 +1044,6 @@ class LearningService:
                         if url not in paragraph_urls:
                             paragraph_urls.append(url)
                     paragraphs.append(paragraph.model_copy(update={"source_urls": urls}))
-                if len(paragraph_urls) < 2:
-                    raise ValueError(
-                        f"Planner lesson {lesson.id} must synthesize at least two verified sources."
-                    )
                 lesson_urls = cls._grounded_source_urls(
                     lesson.source_urls or paragraph_urls,
                     verified_urls,

@@ -204,11 +204,15 @@ function LessonList({ plan, sourcesByUrl }: { plan: LearningRun; sourcesByUrl: M
 
 function SourceLedger({ plan }: { plan: LearningRun }) {
   const visits = plan.research.visited_sources ?? [];
+  const coverage = plan.research.coverage ?? [];
+  const coveredCount = coverage.filter((item) => item.status === "covered").length;
   return (
     <View style={styles.sectionStack}>
       <View>
         <Text style={styles.sectionTitle}>Sources used in the course</Text>
-        <Text style={styles.bodyMuted}>{plan.research.sources.length} verified sources were selected after reading {visits.filter((item) => item.status === "read").length} pages.</Text>
+        <Text style={styles.bodyMuted}>{plan.research.sources.length} verified source{plan.research.sources.length === 1 ? "" : "s"} grounded the course after reading {visits.filter((item) => item.status === "read").length} pages.</Text>
+        {coverage.length ? <Text style={styles.bodyMuted}>Coverage: {coveredCount}/{coverage.length} requirements covered · {plan.research.stop_reason?.replaceAll("_", " ")}</Text> : null}
+        {plan.research.warnings?.map((warning) => <Text key={warning} style={styles.error}>{warning}</Text>)}
       </View>
       {plan.research.sources.length ? plan.research.sources.map((source) => (
         <View key={source.url} style={styles.sourceCard}>
