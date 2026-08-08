@@ -62,15 +62,15 @@ Dishka, and that service calls a replaceable outbound health port.
 
 For local PostgreSQL, run `docker compose -f docker-compose.yml up -d` from `backend/` and set `DATABASE_URL=postgresql+asyncpg://learning_coach:learning_coach@127.0.0.1:5432/learning_coach` in `backend/.env`. Run `alembic upgrade head` to create or update the schema. For deployment, use the Supabase Session Pooler connection string in `DATABASE_URL`, then run that same migration command in the deployment environment. Supabase Auth owns email/password credentials; the backend verifies each Supabase access token and creates a matching application profile on first use.
 
-The API docs are available at `http://127.0.0.1:8000/docs`. The default `mock` provider makes the app usable locally without an LLM. Configure a real provider in `backend/.env`:
+The API docs are available at `http://127.0.0.1:8000/docs`. Course generation always uses a live agent provider and public browser research. Gemini CLI is the default:
 
 ```bash
-AGENT_PROVIDER=codex       # codex, gemini-cli, antigravity-cli, or mock
+AGENT_PROVIDER=gemini-cli  # gemini-cli, codex, or antigravity-cli
 ```
 
-For a local-only SQLite demo, set `DATABASE_URL=sqlite+aiosqlite:///./learning_local.db` and `LOCAL_AUTH=true`. This explicitly disables Supabase token verification for that process; never enable it in a deployed environment.
+For local-only development, set `DATABASE_URL=sqlite+aiosqlite:///./learning_local.db` and `LOCAL_AUTH=true`. This explicitly disables Supabase token verification for that process; never enable it in a deployed environment.
 
-Copy `backend/.env.example` to `backend/.env`, set the Supabase values, and replace the encryption key before deployment. Each real provider is executed through its installed CLI; ensure it is authenticated on the server. CLI invocation flags can change, so the example supports `CODEX_COMMAND`, `GEMINI_CLI_COMMAND`, and `ANTIGRAVITY_CLI_COMMAND` overrides that emit one JSON object to stdout. The harness keeps commands behind one adapter, so moving to an API/SDK-based provider later does not affect the three-agent workflow.
+Copy `backend/.env.example` to `backend/.env`, set the Supabase values, and replace the encryption key before deployment. Each provider is executed through its installed CLI; ensure it is authenticated on the server. Install the pinned project tools with `npm install`, run `npm run browser:install`, and verify them with `npm run browser:doctor`. CLI invocation flags can change, so the example supports `CODEX_COMMAND`, `GEMINI_CLI_COMMAND`, and `ANTIGRAVITY_CLI_COMMAND` overrides. The harness keeps commands behind one adapter.
 
 Set the first administrator's Supabase Auth `app_metadata.role` to `admin` in the Supabase dashboard or with a server-side administrative tool. The mobile admin screen then controls the default agent provider; the setting is stored in PostgreSQL and applies to new runs immediately without restarting the API.
 
@@ -88,15 +88,14 @@ Press `w` for the web app, `i` for iOS simulator, or `a` for Android emulator. E
 
 Copy `mobile/.env.example` to `mobile/.env`. Set the Supabase Project URL and publishable key; for an iOS/Android device, set `EXPO_PUBLIC_API_URL` to your computer's LAN address, for example `http://192.168.1.10:8000`.
 
-## Next product milestones
-
 ## Agent harness
 
-`POST /learning-runs` coordinates three explicitly scoped agents:
+`POST /learning-runs` runs a real, evidence-gated pipeline:
 
-1. **Researcher** discovers and ranks sources (papers, official docs, open-source repositories, lectures, books, articles) and must retain URLs and rationale.
-2. **Planner** selects the relevant research and creates a curriculum that respects the learner's level, timeline, and weekly availability.
-3. **Examiner** creates quizzes, assignments, and a project. Its later evaluation endpoint uses results to recommend adding, removing, or reviewing content.
+1. **Research query planner** creates eight complementary discovery queries and canonical seed candidates.
+2. **Browser research** searches public pages, reads exactly twelve candidates, and retains a complete visit ledger.
+3. **Research selector and synthesis** filter the readable evidence into 8-12 verified sources with concrete teaching points.
+4. **Planner** creates the complete course, paragraph-level citations, quizzes, answer explanations, assignment, rubric, and project. Invalid or unverified output fails instead of falling back to generic content.
 
 The adapters support Codex, Gemini CLI, and Antigravity CLI. Gemini CLI is retained as requested; Google's current tooling is transitioning it to Antigravity CLI, so Antigravity is available as a separate provider. [Google's Antigravity documentation](https://www.antigravity.google/docs/cli-overview) describes the current CLI; [the Gemini CLI transition notice](https://github.com/google-gemini/gemini-cli/discussions/27274) explains the migration.
 
@@ -121,11 +120,11 @@ backend/app/
 - `POST /auth/register`, `POST /auth/login`, and `GET /auth/me` provide email/password JWT authentication. The configured `ADMIN_EMAIL` / `ADMIN_PASSWORD` account is created with the `admin` role on first startup.
 - Agent runs, sessions, tool invocations, and encrypted/redacted transcript entries are persisted. Learners can access only their own data; `/analytics/*` is admin-only.
 - The Expo client includes an admin analytics screen with user and session lists, outcome metrics, and full searchable transcript drill-down.
-- Run the deterministic suite with `cd backend && pytest -q --benchmark-disable`; run benchmarks with `pytest --benchmark-only`. Opt-in authenticated CLI evaluation is `python scripts/live_provider_evaluation.py` with `AGENT_PROVIDER` set to `codex`, `gemini-cli`, or `antigravity-cli`.
+- Run the test suite with `cd backend && pytest -q --benchmark-disable`; run benchmarks with `pytest --benchmark-only`. The tests use controlled executable doubles for external CLIs but exercise the same browser-research and course-validation pipeline. Opt-in authenticated CLI evaluation is `python scripts/live_provider_evaluation.py`.
+- Run a complete opt-in live course smoke test with `cd backend && python scripts/live_course_smoke.py`. It consumes Gemini quota, browses public pages, and prints the exact selected source URLs plus course completeness counts.
 
 ## Next product milestones
 
-1. Replace the deterministic research fallback with search APIs and source fetching in a sandbox.
-2. Add authentication, database persistence, and background job queues for long-running research.
-3. Add citations, source-quality review, and human approval before plan publication.
-4. Add notifications, calendar scheduling, and learning analytics.
+1. Move long-running research into durable background jobs with progress streaming.
+2. Add human source-quality review before course publication.
+3. Add notifications, calendar scheduling, and deeper learning analytics.

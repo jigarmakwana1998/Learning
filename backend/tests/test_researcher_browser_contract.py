@@ -12,7 +12,8 @@ def test_researcher_uses_only_safe_browser_tools_and_requires_read_evidence():
     instruction = prompt["instruction"]
     assert "8-12" in instruction
     assert "exactly 12 candidate pages" in instruction
-    assert "four focused" in instruction
+    assert "eight focused" in instruction
+    assert "up to two distinct replacement searches" in instruction
     assert "key_points" in instruction
     assert "exact final URLs" in instruction
     assert "successful browser_read" in instruction

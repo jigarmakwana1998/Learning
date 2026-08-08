@@ -19,7 +19,7 @@ from app.models.database import Base, User
 async def lifespan(_: FastAPI):
     settings = get_settings()
     # Production Postgres schemas are managed exclusively by Alembic. SQLite is
-    # retained for isolated tests and zero-setup local mock development.
+    # retained for isolated tests and zero-setup local development.
     if settings.database_url.startswith("sqlite"):
         async with engine.begin() as connection:
             await connection.run_sync(Base.metadata.create_all)

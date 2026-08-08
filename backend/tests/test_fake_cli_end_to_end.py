@@ -12,6 +12,7 @@ from fastapi.testclient import TestClient
 from app.browser.client import AgentBrowserClient
 from app.browser.gateway import BrowserGateway
 from app.main import app
+from app.services.learning_service import learning_service
 
 
 def _public_resolver(_host, port, *, type):
@@ -45,7 +46,9 @@ print(json.dumps(results))
 def _write_fake_gemini(path: Path) -> None:
     path.write_text(
         """import json, sys
-prompt = sys.argv[-1]
+prompt = sys.stdin.read() or sys.argv[-1]
+request = json.loads(prompt)
+agent = request.get('agent')
 sources = [
     {'title': f'Source {index}', 'url': f'https://docs.example.com/source-{index}',
      'kind': ['documentation', 'paper', 'book', 'lecture', 'slides', 'article', 'repository'][index % 7],
@@ -54,17 +57,42 @@ sources = [
                     f'Worked example or limitation supported by source {index}']}
     for index in range(12)
 ]
-if '\"agent\": \"Researcher\"' in prompt:
-    for batch_index in range(3):
-        batch = sources[batch_index * 4:(batch_index + 1) * 4]
-        tool_id = f'read-{batch_index + 1}'
-        print(json.dumps({'type': 'tool_use', 'tool_id': tool_id, 'tool_name': 'browser_read',
-                          'parameters': {'urls': [item['url'] for item in batch]}}))
-        print(json.dumps({'type': 'tool_result', 'tool_id': tool_id, 'tool_name': 'browser_read',
-                          'status': 'success',
-                          'output': {'pages': [{'status': 'ok', 'url': item['url']} for item in batch]}}))
-    print(json.dumps({'type': 'result', 'response': json.dumps({'topic': 'Python functions', 'sources': sources})}))
-elif '\"agent\": \"Planner\"' in prompt:
+if agent == 'ResearchQueryPlanner':
+    response = {
+        'queries': [
+            {'query': f'Lead{index} Python function evidence angle', 'purpose': f'Distinct research purpose {index}'}
+            for index in range(8)
+        ],
+        'replacement_queries': [
+            {'query': f'Replacement{index} Python function evidence', 'purpose': f'Replacement research purpose {index}'}
+            for index in range(2)
+        ],
+        'seed_candidates': [
+            {'title': item['title'], 'url': item['url'], 'purpose': f'Canonical source purpose {index}'}
+            for index, item in enumerate(sources)
+        ],
+    }
+elif agent == 'ResearchSelector':
+    candidates = request['context']['candidates']
+    response = {'selections': [
+        {'url': item['url'], 'kind': sources[index]['kind'], 'reason': f'Coverage reason {index}'}
+        for index, item in enumerate(candidates[:12])
+    ]}
+elif agent == 'ResearchSynthesis':
+    pages = request['context']['pages']
+    response = {
+        'topic': request['learner_goal']['topic'],
+        'sources': [
+            {
+                'title': page['title'], 'url': page['url'], 'kind': sources[index]['kind'],
+                'rationale': f'Verified evidence for curriculum section {index}',
+                'key_points': [f'Concrete mechanism supported by source {index}',
+                               f'Worked example or limitation supported by source {index}'],
+            }
+            for index, page in enumerate(pages)
+        ],
+    }
+elif agent == 'Planner':
     def paragraphs(label, first_source):
         items = []
         for paragraph_index in range(6):
@@ -95,9 +123,31 @@ elif '\"agent\": \"Planner\"' in prompt:
                       'practice': 'Write three executable checks for one function and explain what each check demonstrates about its contract.',
                       'estimated_minutes': 60, 'source_urls': [sources[1]['url'], sources[2]['url']]}
                    ]}]
-    print(json.dumps({'response': json.dumps({'curriculum': curriculum})}))
+    assessment = {
+        'quiz_items': [
+            {'id': 'week-1-q1', 'module_week': 1,
+             'prompt': 'What observable behavior distinguishes returning a value from printing it?',
+             'choices': ['The caller receives the returned value', 'Both always change global state', 'Printing creates a parameter'],
+             'correct_answer': 'The caller receives the returned value',
+             'explanation': 'A return expression passes a value to the caller, while printing only writes text to an output stream.'},
+            {'id': 'week-1-q2', 'module_week': 1,
+             'prompt': 'Which test best checks a function contract at a boundary?',
+             'choices': ['Use the smallest valid input and compare the exact result', 'Rename the function', 'Skip invalid inputs'],
+             'correct_answer': 'Use the smallest valid input and compare the exact result',
+             'explanation': 'A boundary example tests the edge of the stated contract and compares an observable result with an expectation.'},
+        ],
+        'assignment': {
+            'title': 'Function contract evidence notebook',
+            'prompt': 'Implement two related Python functions and document their contracts, boundary examples, observed results, and one evidence-based revision.',
+            'deliverables': ['Two executable function implementations', 'A table of predicted and observed results'],
+            'rubric': ['Function contracts are stated precisely', 'Recorded evidence supports every claimed result'],
+        },
+        'project': 'Build a small reusable Python module, validate its public function contracts, and explain the evidence behind each design decision.',
+    }
+    response = {'curriculum': curriculum, 'assessment': assessment}
 else:
-    print(json.dumps({'response': json.dumps({'quiz': [], 'assignment': {}, 'project': 'Practice project'})}))
+    raise SystemExit(f'Unexpected agent role: {agent}')
+print(json.dumps({'response': json.dumps(response)}))
 """,
         encoding="utf-8",
     )
@@ -123,6 +173,14 @@ def test_fake_browser_and_gemini_executables_generate_complete_course(tmp_path, 
     assert browser_result["pages"][0]["status"] == "ok"
 
     monkeypatch.setenv("GEMINI_CLI_COMMAND", f'"{sys.executable}" "{fake_gemini}"')
+    monkeypatch.setattr(
+        learning_service,
+        "browser_gateway_factory",
+        lambda: BrowserGateway(
+            client=AgentBrowserClient(command=[sys.executable, str(fake_browser)]),
+            resolver=_public_resolver,
+        ),
+    )
     with TestClient(app) as client:
         admin = _headers(client, "admin@example.com", "AdminPass123!")
         provider = client.put(
@@ -179,19 +237,85 @@ def test_fake_browser_and_gemini_executables_generate_complete_course(tmp_path, 
             trace = client.get(f"/learning-runs/{course['id']}/trace", headers=learner)
             assert trace.status_code == 200, trace.text
             trace_body = trace.json()
-            assert [session["agent_name"] for session in trace_body["sessions"]] == [
-                "Researcher", "Planner"
-            ]
+            assert {session["agent_name"] for session in trace_body["sessions"]} == {
+                "BrowserResearch", "ResearchQueryPlanner", "ResearchSelector",
+                "ResearchSynthesisPart1", "ResearchSynthesisPart2", "Planner",
+            }
             assert all(session["transcript"] for session in trace_body["sessions"])
-            researcher_trace = trace_body["sessions"][0]
-            assert len(researcher_trace["tool_invocations"]) == 3
+            researcher_trace = next(
+                session for session in trace_body["sessions"]
+                if session["agent_name"] == "BrowserResearch"
+            )
+            assert len(researcher_trace["tool_invocations"]) == 13
             assert {
                 page["url"]
                 for tool in researcher_trace["tool_invocations"]
-                for page in tool["metadata"]["page_results"]
+                for page in tool["metadata"].get("page_results", [])
             } == verified_urls
+
+            lesson = course["course"]["modules"][0]["lessons"][0]
+            progress = client.patch(
+                f"/learning-runs/{course['id']}/progress",
+                headers=learner,
+                json={"lesson_id": lesson["id"], "completed": True},
+            )
+            assert progress.status_code == 200, progress.text
+            assert progress.json()["completed_lessons"] == 1
+
+            answers = [
+                {"question_id": question["id"], "answer": question["choices"][0]}
+                for question in course["assessment"]["quiz_items"]
+            ]
+            quiz = client.post(
+                f"/learning-runs/{course['id']}/quiz-submissions",
+                headers=learner,
+                json={"quiz_id": "course-quiz", "answers": answers},
+            )
+            assert quiz.status_code == 200, quiz.text
+            assert quiz.json()["score_percent"] == 100
+
+            submission = client.post(
+                f"/learning-runs/{course['id']}/submissions",
+                headers=learner,
+                json={
+                    "kind": "assignment",
+                    "response": "I implemented both functions, recorded boundary predictions and outputs, then revised input validation based on the observed evidence.",
+                },
+            )
+            assert submission.status_code == 200, submission.text
+            assert submission.json()["feedback"]
+
+            repeated_progress = client.patch(
+                f"/learning-runs/{course['id']}/progress",
+                headers=learner,
+                json={"lesson_id": lesson["id"], "completed": True},
+            )
+            reopened_progress = client.patch(
+                f"/learning-runs/{course['id']}/progress",
+                headers=learner,
+                json={"lesson_id": lesson["id"], "completed": False},
+            )
+            assert repeated_progress.json()["completed_lessons"] == 1
+            assert reopened_progress.json()["completed_lessons"] == 0
+
+            other_email = f"other-{uuid4().hex}@example.com"
+            other_registration = client.post(
+                "/auth/register",
+                json={"email": other_email, "password": "LearnerPass123!"},
+            )
+            other = {
+                "Authorization": f"Bearer {other_registration.json()['access_token']}"
+            }
+            assert client.get(
+                f"/learning-runs/{course['id']}/trace", headers=other
+            ).status_code == 404
+            assert client.patch(
+                f"/learning-runs/{course['id']}/progress",
+                headers=other,
+                json={"lesson_id": lesson["id"], "completed": True},
+            ).status_code == 404
         finally:
             reset = client.put(
-                "/analytics/settings/agent-provider", headers=admin, json={"provider": "mock"}
+                "/analytics/settings/agent-provider", headers=admin, json={"provider": "gemini-cli"}
             )
             assert reset.status_code == 200, reset.text

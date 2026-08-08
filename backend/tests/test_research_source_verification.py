@@ -73,7 +73,7 @@ def test_rejects_a_brief_without_the_required_source_mix():
     for item in sources:
         item["kind"] = "documentation"
 
-    with pytest.raises(ValueError, match="must cover documentation, paper, book, article, and repository"):
+    with pytest.raises(ValueError, match="primary, practical, and explanatory"):
         LearningService._verified_research(research_output(sources))
 
 
@@ -95,7 +95,7 @@ def test_fails_clearly_when_fewer_than_eight_unique_sources_were_read(sources, v
 
 @pytest.mark.asyncio
 async def test_create_run_stops_before_planning_when_research_evidence_is_insufficient(monkeypatch):
-    invalid_research = research_output([source(index) for index in range(8)], [])
+    harness_calls: list[str] = []
 
     class FakeDb:
         def __init__(self):
@@ -103,7 +103,7 @@ async def test_create_run_stops_before_planning_when_research_evidence_is_insuff
             self.commits = 0
 
         async def scalar(self, _statement):
-            return SimpleNamespace(value="gemini-cli")
+            return SimpleNamespace(value="codex")
 
         def add(self, record):
             self.added.append(record)
@@ -117,26 +117,30 @@ async def test_create_run_stops_before_planning_when_research_evidence_is_insuff
             self.commits += 1
 
     class FakeHarness:
-        calls = []
-
         def __init__(self, _provider, _db):
             pass
 
         async def start_and_run(self, _run_id, agent_name, _prompt):
-            self.calls.append(agent_name)
-            return SimpleNamespace(id="research-session"), invalid_research
+            harness_calls.append(agent_name)
+            raise AssertionError("Planner must not run after browser research fails")
 
     monkeypatch.setattr("app.services.learning_service.AgentHarness", FakeHarness)
+    service = LearningService()
+
+    async def fail_research(*_args):
+        raise ValueError("Browser research requires at least 8 unique browser-verified sources")
+
+    monkeypatch.setattr(service, "_browser_research", fail_research)
     db = FakeDb()
 
     with pytest.raises(ValueError, match="at least 8 unique browser-verified sources"):
-        await LearningService().create_run(
+        await service.create_run(
             db,
             SimpleNamespace(id="learner"),
             LearningRunRequest(topic="Transformers", weeks=2),
         )
 
-    assert FakeHarness.calls == ["Researcher"]
+    assert harness_calls == []
     assert db.commits == 1
 
 

@@ -47,7 +47,7 @@ class EvidenceRef(BaseModel):
     char_span_start: int = Field(ge=0)
     char_span_end: int = Field(ge=0)
 
-    def model_post_init(self, __context: Any) -> None:
+    def model_post_init(self, __context: Any, /) -> None:
         if self.char_span_end < self.char_span_start:
             raise ValueError("char_span_end must be greater than or equal to char_span_start")
 

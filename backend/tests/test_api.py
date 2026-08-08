@@ -9,21 +9,18 @@ def auth(client: TestClient, email: str = "learner@example.com") -> dict[str, st
     return {"Authorization": f"Bearer {token}"}
 
 
-def test_learning_run_persists_three_sessions_and_transcripts():
+def test_removed_offline_provider_is_rejected():
     with TestClient(app) as client:
-        headers = auth(client)
-        response = client.post("/learning-runs", headers=headers, json={"topic": "Python", "weeks": 3, "hours_per_week": 4, "provider": "mock"})
-        assert response.status_code == 200
-        run = response.json()
-        assert len(run["sessions"]) == 3
-        transcript = client.get(f"/agent-sessions/{run['sessions']['Researcher']}", headers=headers)
-        assert transcript.status_code == 200
-        assert transcript.json()["transcript"]
-        resumed = client.post(f"/agent-sessions/{run['sessions']['Researcher']}/resume", headers=headers, json={"prompt": "Continue with one example."})
-        assert resumed.status_code == 200
-        closed = client.post(f"/agent-sessions/{run['sessions']['Researcher']}/close", headers=headers)
-        assert closed.json()["status"] == "closed"
-        assert client.post(f"/agent-sessions/{run['sessions']['Researcher']}/resume", headers=headers, json={"prompt": "Try again"}).status_code == 422
+        token = client.post(
+            "/auth/login",
+            json={"email": "admin@example.com", "password": "AdminPass123!"},
+        ).json()["access_token"]
+        response = client.put(
+            "/analytics/settings/agent-provider",
+            headers={"Authorization": f"Bearer {token}"},
+            json={"provider": "mock"},
+        )
+        assert response.status_code == 422
 
 
 def test_analytics_is_admin_only():
@@ -35,4 +32,4 @@ def test_analytics_is_admin_only():
         assert client.get("/analytics/overview", headers=headers).status_code == 200
         assert client.get("/analytics/users", headers=headers).status_code == 200
         assert client.get("/analytics/requests?status=completed", headers=headers).status_code == 200
-        assert client.get("/analytics/sessions?provider=mock", headers=headers).status_code == 200
+        assert client.get("/analytics/sessions?provider=gemini-cli", headers=headers).status_code == 200

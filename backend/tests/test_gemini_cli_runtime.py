@@ -8,8 +8,10 @@ from app.harness.providers.cli import CliRuntime
 
 class FakeProcess:
     returncode = 0
+    input = None
 
     async def communicate(self, _input):
+        self.input = _input
         return json.dumps({"response": '{"topic":"Attention","sources":[]}', "stats": {}}).encode(), b""
 
 
@@ -31,6 +33,7 @@ async def test_streaming_execution_finishes_on_result_without_waiting_for_eof(mo
     class StreamingProcess:
         pid = 1234
         returncode = None
+        stdin = None
         stdout = StreamReader([final])
         stderr = StreamReader([])
 
@@ -55,13 +58,14 @@ async def test_streaming_execution_finishes_on_result_without_waiting_for_eof(mo
 
 
 @pytest.mark.asyncio
-async def test_gemini_runtime_maps_local_env_and_unwraps_response(monkeypatch):
+async def test_gemini_runtime_maps_api_key_without_cloud_project_and_unwraps_response(monkeypatch):
     captured = {}
 
     async def create_process(*command, **kwargs):
         captured["command"] = command
         captured["kwargs"] = kwargs
-        return FakeProcess()
+        captured["process"] = FakeProcess()
+        return captured["process"]
 
     monkeypatch.delenv("GEMINI_API_KEY", raising=False)
     monkeypatch.delenv("GOOGLE_CLOUD_PROJECT", raising=False)
@@ -73,11 +77,33 @@ async def test_gemini_runtime_maps_local_env_and_unwraps_response(monkeypatch):
     execution = await CliRuntime("gemini-cli", ["gemini", "--output-format", "json"], "GEMINI_CLI_COMMAND", prompt_flag="-p").execute("teach attention")
 
     assert execution.payload == {"topic": "Attention", "sources": []}
-    assert captured["command"][-2:] == ("-p", "teach attention")
-    assert captured["kwargs"]["stdin"] is None
+    assert captured["command"][-2:] == ("-p", "")
+    assert captured["kwargs"]["stdin"] is asyncio.subprocess.PIPE
+    assert captured["process"].input == b"teach attention"
     assert captured["kwargs"]["env"]["GEMINI_API_KEY"] == "test-key-not-a-real-secret"
-    assert captured["kwargs"]["env"]["GOOGLE_CLOUD_PROJECT"] == "projects/784566960532"
+    assert "GOOGLE_CLOUD_PROJECT" not in captured["kwargs"]["env"]
     assert captured["kwargs"]["env"]["GEMINI_CLI_TRUST_WORKSPACE"] == "true"
+
+
+@pytest.mark.asyncio
+async def test_gemini_runtime_maps_cloud_project_only_for_explicit_vertex_auth(monkeypatch):
+    captured = {}
+
+    async def create_process(*command, **kwargs):
+        captured["kwargs"] = kwargs
+        return FakeProcess()
+
+    monkeypatch.delenv("GOOGLE_CLOUD_PROJECT", raising=False)
+    monkeypatch.setenv("project_id", "projects/784566960532")
+    monkeypatch.setenv("GOOGLE_GENAI_USE_VERTEXAI", "true")
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", create_process)
+
+    await CliRuntime(
+        "gemini-cli", ["gemini", "--output-format", "json"],
+        "GEMINI_CLI_COMMAND", prompt_flag="-p",
+    ).execute("teach attention")
+
+    assert captured["kwargs"]["env"]["GOOGLE_CLOUD_PROJECT"] == "projects/784566960532"
 
 
 def test_gemini_response_can_be_json_fenced():
@@ -292,3 +318,6 @@ def test_only_structured_rate_limits_are_retryable():
     assert CliRuntime._structured_rate_limit_delay('{"error":{"code":429,"retryAfter":3}}') == 3
     assert CliRuntime._structured_rate_limit_delay('{"error":{"code":429,"retry_after":"2.5s"}}') == 2.5
     assert CliRuntime._structured_rate_limit_delay('{\n"error": {"status": "RESOURCE_EXHAUSTED"}\n}') == 1
+    assert CliRuntime._structured_rate_limit_delay(
+        "TerminalQuotaError: You have exhausted your daily quota on this model."
+    ) == 1

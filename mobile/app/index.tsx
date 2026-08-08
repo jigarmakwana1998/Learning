@@ -128,13 +128,6 @@ export default function HomeScreen() {
 
             {plan && (
               <View style={styles.courseShell}>
-                {plan.provider === "mock" && (
-                  <View style={styles.warning}>
-                    <Text style={styles.warningTitle}>Demonstration mode does not browse the internet</Text>
-                    <Text style={styles.warningText}>This output proves the workflow only. Use a live agent provider for researched lessons and citations.</Text>
-                  </View>
-                )}
-
                 <Text style={styles.cardTitle}>{plan.research.topic}</Text>
                 <View accessibilityRole="tablist" style={styles.tabs}>
                   <Tab active={courseView === "lesson"} label="Lessons" onPress={() => setCourseView("lesson")} />
@@ -196,7 +189,12 @@ function LessonList({ plan, sourcesByUrl }: { plan: LearningRun; sourcesByUrl: M
       ))}
       <View style={styles.practice}>
         <Text style={styles.practiceTitle}>Assignment</Text>
-        <Text style={styles.body}>{plan.assessment.assignment}</Text>
+        <Text style={styles.lessonTitle}>{plan.assessment.assignment.title}</Text>
+        <Text style={styles.body}>{plan.assessment.assignment.prompt}</Text>
+        <Text style={styles.citationLabel}>Deliverables</Text>
+        {plan.assessment.assignment.deliverables.map((item) => <Text key={item} style={styles.bullet}>• {item}</Text>)}
+        <Text style={styles.citationLabel}>Rubric</Text>
+        {plan.assessment.assignment.rubric.map((item) => <Text key={item} style={styles.bullet}>• {item}</Text>)}
         <Text style={styles.practiceTitle}>Project</Text>
         <Text style={styles.body}>{plan.assessment.project}</Text>
       </View>
@@ -219,7 +217,7 @@ function SourceLedger({ plan }: { plan: LearningRun }) {
           <Text style={styles.bodyMuted}>{source.rationale}</Text>
           {source.key_points?.map((point) => <Text key={point} style={styles.bullet}>• {point}</Text>)}
         </View>
-      )) : <Text style={styles.empty}>No live sources were selected for this demonstration run.</Text>}
+      )) : <Text style={styles.error}>This run has no verified sources and cannot be used as a researched course.</Text>}
 
       <Text style={styles.sectionTitle}>Every page visited</Text>
       {visits.length ? visits.map((visit, index) => (
@@ -248,6 +246,8 @@ function TracePanel({ trace, error, onRetry }: { trace: LearningRunTrace | null;
           {session.tool_invocations.map((tool, index) => (
             <View key={`${tool.created_at}-${index}`} style={styles.toolEntry}>
               <Text style={styles.practiceTitle}>{tool.tool_name} · {tool.status}</Text>
+              {tool.metadata?.query ? <Text style={styles.sourceTitle}>{tool.metadata.query}</Text> : null}
+              {tool.metadata?.purpose ? <Text style={styles.bodyMuted}>{tool.metadata.purpose}</Text> : null}
               {(tool.metadata?.page_results ?? []).map((page) => <Pressable key={page.url} onPress={() => openPublicUrl(page.url)}><Text style={styles.urlText}>{page.status}: {page.url}</Text></Pressable>)}
               {!(tool.metadata?.page_results?.length) && tool.metadata?.urls?.map((url) => <Text key={url} style={styles.urlText}>{url}</Text>)}
             </View>
@@ -280,9 +280,6 @@ const styles = StyleSheet.create({
   userRow: { flexDirection: "row", justifyContent: "space-between", alignItems: "center", gap: 8 },
   signedIn: { flex: 1, color: "#332f46" },
   courseShell: { backgroundColor: "#fff", borderRadius: 18, padding: 16, marginTop: 16, gap: 16, borderWidth: 1, borderColor: "#e6e3ef" },
-  warning: { backgroundColor: "#fff5d8", borderColor: "#e0b42c", borderWidth: 1, borderRadius: 12, padding: 14, gap: 5 },
-  warningTitle: { color: "#5c4300", fontWeight: "800" },
-  warningText: { color: "#654f12", lineHeight: 21 },
   tabs: { flexDirection: "row", flexWrap: "wrap", gap: 8, borderBottomWidth: 1, borderBottomColor: "#eceaf3", paddingBottom: 12 },
   tab: { minHeight: 44, paddingHorizontal: 14, justifyContent: "center", borderRadius: 10 },
   activeTab: { backgroundColor: "#eeeafe" },

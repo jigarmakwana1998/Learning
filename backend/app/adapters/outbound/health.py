@@ -1,8 +1,8 @@
 from app.domain.health import HealthStatus
 
 
-class MockHealthCheckAdapter:
-    """Local liveness adapter; replaceable by dependency-aware checks later."""
+class LivenessHealthCheckAdapter:
+    """Process-level liveness adapter."""
 
     async def check(self) -> HealthStatus:
         return HealthStatus(status="ok")

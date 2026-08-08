@@ -6,7 +6,7 @@ from app.schemas.learning import LearningGoal
 
 class LearningAgent(ABC):
     name: str
-    tools: list[str]
+    tools: tuple[str, ...]
 
     @abstractmethod
     def instruction(self) -> str: ...

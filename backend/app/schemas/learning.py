@@ -3,7 +3,12 @@ from typing import Literal
 
 from pydantic import BaseModel, Field
 
-AgentProvider = Literal["mock", "codex", "gemini-cli", "antigravity-cli"]
+AgentProvider = Literal["codex", "gemini-cli", "antigravity-cli"]
+LIVE_AGENT_PROVIDERS: tuple[AgentProvider, ...] = (
+    "codex",
+    "gemini-cli",
+    "antigravity-cli",
+)
 
 
 class LearningGoal(BaseModel):
@@ -65,8 +70,7 @@ class Lesson(BaseModel):
     paragraphs: list[LessonParagraph] = Field(default_factory=list)
     practice: str
     estimated_minutes: int = Field(ge=5, le=240)
-    # Optional for stored legacy/mock courses. Real provider output is validated
-    # and populated with URLs from its containing module when omitted.
+    # Provider output is validated and populated from paragraph citations when omitted.
     source_urls: list[str] = Field(default_factory=list)
 
 
@@ -82,10 +86,10 @@ class QuizItem(BaseModel):
 
 
 class Assignment(BaseModel):
-    title: str
-    prompt: str
-    deliverables: list[str]
-    rubric: list[str]
+    title: str = Field(min_length=3, max_length=500)
+    prompt: str = Field(min_length=40, max_length=5000)
+    deliverables: list[str] = Field(min_length=2, max_length=8)
+    rubric: list[str] = Field(min_length=2, max_length=8)
 
 
 class Assessment(BaseModel):
@@ -93,7 +97,7 @@ class Assessment(BaseModel):
     quiz: list[QuizItem] = Field(default_factory=list)
     quiz_items: list[QuizItem] = Field(default_factory=list)
     assignment: Assignment
-    project: str
+    project: str = Field(min_length=40, max_length=5000)
 
 
 class Course(BaseModel):

@@ -23,7 +23,7 @@ from app.mcp.tools import LEARNING_TOOLS, RESEARCH_TOOLS
 def test_agents_emit_machine_readable_prompt_contracts(agent):
     payload = json.loads(agent.build_prompt(LearningGoal(topic="Python", weeks=4)))
     assert payload["agent"] == agent.name
-    assert payload["tools"] == agent.tools
+    assert payload["tools"] == list(agent.tools)
     assert payload["learner_goal"]["topic"] == "Python"
 
 

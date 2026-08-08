@@ -80,6 +80,38 @@ def _planner_output(*, module_urls: list[str] | None = None, lessons: list[dict]
     }
 
 
+def _assessment_output() -> dict:
+    return {
+        "assessment": {
+            "quiz_items": [
+                {
+                    "id": "week-1-q1",
+                    "module_week": 1,
+                    "prompt": "What does a Python function return to its caller?",
+                    "choices": ["The evaluated return value", "Only printed text", "A new global variable"],
+                    "correct_answer": "The evaluated return value",
+                    "explanation": "The return statement passes an evaluated value back to the calling expression.",
+                },
+                {
+                    "id": "week-1-q2",
+                    "module_week": 1,
+                    "prompt": "Which observation best validates a function boundary case?",
+                    "choices": ["The exact result for the smallest valid input", "The function name", "The file size"],
+                    "correct_answer": "The exact result for the smallest valid input",
+                    "explanation": "Comparing a boundary input's observed result with its expected result tests the stated contract.",
+                },
+            ],
+            "assignment": {
+                "title": "Function contract notebook",
+                "prompt": "Implement two functions and document their inputs, outputs, boundary cases, observed evidence, and one revision.",
+                "deliverables": ["Two executable function implementations", "A table of predicted and observed outputs"],
+                "rubric": ["Each function contract is precise", "Observed evidence supports every conclusion"],
+            },
+            "project": "Build a reusable Python module and validate each public function contract with recorded boundary evidence.",
+        }
+    }
+
+
 def test_provider_course_preserves_authored_content_and_normalizes_verified_citations():
     research = _research()
     output = _planner_output(
@@ -177,3 +209,57 @@ def test_provider_modules_require_primary_evidence_and_bounded_lesson_time():
             _planner_output(lessons=long_lessons),
             research,
         )
+
+
+def test_provider_assessment_preserves_authored_quiz_assignment_and_answer_keys():
+    assessment = LearningService._provider_assessment(
+        LearningGoal(topic="Python functions", weeks=1),
+        _assessment_output(),
+    )
+
+    assert len(assessment.quiz_items) == 2
+    assert assessment.quiz == assessment.quiz_items
+    assert assessment.quiz_items[0].correct_answer == "The evaluated return value"
+    assert assessment.assignment.title == "Function contract notebook"
+    assert assessment.project.startswith("Build a reusable Python module")
+
+
+def test_provider_assessment_normalizes_labeled_rubric_object():
+    output = _assessment_output()
+    output["assessment"]["assignment"]["rubric"] = {
+        "Accuracy": "Every conclusion matches the recorded evidence",
+        "Completeness": "Every required artifact is present",
+    }
+    output["assessment"]["project"] = {
+        "title": "Function behavior capstone",
+        "description": "Build and validate a reusable module with documented evidence",
+    }
+
+    assessment = LearningService._provider_assessment(
+        LearningGoal(topic="Python functions", weeks=1), output
+    )
+
+    assert assessment.assignment.rubric == [
+        "Accuracy: Every conclusion matches the recorded evidence",
+        "Completeness: Every required artifact is present",
+    ]
+    assert assessment.project == (
+        "Function behavior capstone. Build and validate a reusable module with documented evidence."
+    )
+
+
+def test_provider_assessment_rejects_missing_or_generic_content():
+    goal = LearningGoal(topic="Python functions", weeks=1)
+
+    with pytest.raises(ValueError, match="assessment object"):
+        LearningService._provider_assessment(goal, {})
+
+    invalid = _assessment_output()
+    invalid["assessment"]["quiz_items"][0]["correct_answer"] = "Invented choice"
+    with pytest.raises(ValueError, match="correct_answer in choices"):
+        LearningService._provider_assessment(goal, invalid)
+
+    too_few = _assessment_output()
+    too_few["assessment"]["quiz_items"] = too_few["assessment"]["quiz_items"][:1]
+    with pytest.raises(ValueError, match="2-5 quiz questions per week"):
+        LearningService._provider_assessment(goal, too_few)

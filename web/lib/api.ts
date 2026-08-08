@@ -35,7 +35,7 @@ type AssignmentPrompt = { title?: string; prompt: string; deliverables?: string[
 
 export type LearningRun = {
   id: string;
-  provider: "mock" | "codex" | "gemini-cli" | "antigravity-cli";
+  provider: "codex" | "gemini-cli" | "antigravity-cli";
   research: { topic: string; sources: Source[]; visited_sources?: SourceVisit[] };
   // `course` is the richer v2 response. `curriculum` remains supported for existing API responses.
   course?: { title?: string; modules: ApiModule[] };
@@ -86,7 +86,7 @@ export type AgentTrace = {
       tool_name: string;
       status: string;
       duration_ms?: number;
-      metadata?: { urls?: string[]; domains?: string[]; result_count?: number; success_count?: number; page_results?: Array<{ url: string; status: "read" | "unavailable" }> };
+      metadata?: { query?: string; purpose?: string; urls?: string[]; domains?: string[]; result_count?: number; success_count?: number; page_results?: Array<{ url: string; status: "read" | "unavailable" }> };
       error?: string;
       created_at: string;
     }>;

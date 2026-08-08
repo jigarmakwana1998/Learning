@@ -87,11 +87,10 @@ class CliRuntime:
         stdin = asyncio.subprocess.PIPE
         prompt_bytes = prompt.encode()
         if self.prompt_flag:
-            # create_subprocess_exec does not invoke a shell, so a learner prompt cannot
-            # alter the command. Gemini's documented non-interactive interface uses -p.
-            command.extend([self.prompt_flag, prompt])
-            stdin = None
-            prompt_bytes = None
+            # Keep -p as Gemini's documented headless-mode switch, but send the
+            # actual prompt through stdin. Browser evidence can exceed Windows'
+            # process command-line limit and should not appear in process listings.
+            command.extend([self.prompt_flag, ""])
         try:
             process_group_options = (
                 {"creationflags": subprocess.CREATE_NEW_PROCESS_GROUP}
@@ -116,7 +115,7 @@ class CliRuntime:
         try:
             if self.stream_json:
                 stdout, stderr, terminal_result = await asyncio.wait_for(
-                    self._read_stream_until_result(process), timeout=timeout
+                    self._read_stream_until_result(process, prompt_bytes), timeout=timeout
                 )
             else:
                 stdout, stderr = await asyncio.wait_for(process.communicate(prompt_bytes), timeout=timeout)
@@ -147,12 +146,17 @@ class CliRuntime:
             ) from error
 
     async def _read_stream_until_result(
-        self, process: asyncio.subprocess.Process
+        self, process: asyncio.subprocess.Process, prompt_bytes: bytes | None = None
     ) -> tuple[bytes, bytes, bool]:
         """Read JSONL through its terminal event instead of waiting for child-pipe EOF."""
         if process.stdout is None or process.stderr is None:
             raise RuntimeError(f"{self.name} streaming pipes were not created.")
         stderr_task = asyncio.create_task(process.stderr.read(262_144))
+        if process.stdin is not None:
+            if prompt_bytes:
+                process.stdin.write(prompt_bytes)
+                await process.stdin.drain()
+            process.stdin.close()
         lines: list[bytes] = []
         total = 0
         terminal_result = False
@@ -193,7 +197,15 @@ class CliRuntime:
             # keeping the CLI's canonical environment variables authoritative.
             self._set_if_missing(environment, "GEMINI_API_KEY", "gemini_api_key")
             self._set_if_missing(environment, "GOOGLE_API_KEY", "google_api_key")
-            self._set_if_missing(environment, "GOOGLE_CLOUD_PROJECT", "project_id")
+            # A generic application PROJECT_ID must not opt API-key users into a
+            # Google Cloud authentication path. Gemini only needs this alias when
+            # Vertex AI or Gemini Code Assist authentication was explicitly chosen.
+            cloud_auth = any(
+                environment.get(name, "").strip().casefold() == "true"
+                for name in ("GOOGLE_GENAI_USE_VERTEXAI", "GOOGLE_GENAI_USE_GCA")
+            )
+            if cloud_auth:
+                self._set_if_missing(environment, "GOOGLE_CLOUD_PROJECT", "project_id")
             # Gemini CLI refuses unattended prompts in an untrusted workspace.
             # This flag is scoped to the child process, never persisted in .env.
             environment.setdefault("GEMINI_CLI_TRUST_WORKSPACE", "true")
@@ -530,7 +542,7 @@ class CliRuntime:
     @staticmethod
     def _duration_ms(start: dict[str, Any], end: dict[str, Any]) -> int | None:
         explicit = end.get("duration_ms") or end.get("durationMs")
-        if isinstance(explicit, (int, float)) and explicit >= 0:
+        if isinstance(explicit, int | float) and explicit >= 0:
             return int(explicit)
         try:
             started = datetime.fromisoformat(str(start["timestamp"]).replace("Z", "+00:00"))
@@ -542,6 +554,11 @@ class CliRuntime:
     @classmethod
     def _structured_rate_limit_delay(cls, *outputs: str) -> float | None:
         objects: list[Any] = []
+        # Gemini CLI 0.51 emits its daily-quota classification as a bounded
+        # stderr diagnostic rather than a JSON event. Match only the CLI's
+        # explicit exception name; arbitrary page/model text containing "429"
+        # must never become a retry signal.
+        terminal_quota_error = any("TerminalQuotaError:" in output for output in outputs)
         for output in outputs:
             try:
                 objects.append(json.loads(output))
@@ -553,7 +570,10 @@ class CliRuntime:
                     objects.append(json.loads(line))
                 except json.JSONDecodeError:
                     continue
-        return cls._rate_limit_from_objects(objects)
+        structured_delay = cls._rate_limit_from_objects(objects)
+        if structured_delay is not None:
+            return structured_delay
+        return 1.0 if terminal_quota_error else None
 
     @classmethod
     def _rate_limit_from_objects(cls, objects: list[Any]) -> float | None:

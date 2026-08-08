@@ -9,9 +9,9 @@
    Copy-Item backend/.env.example backend/.env
    ```
 
-2. In `backend/.env`, retain application secrets and set `AGENT_PROVIDER=mock`
-   for local use. The Compose stack overrides `DATABASE_URL` to point at the
-   internal PostgreSQL service.
+2. In `backend/.env`, retain application secrets, set `AGENT_PROVIDER=gemini-cli`,
+   and configure Gemini authentication. The Compose stack overrides `DATABASE_URL`
+   to point at the internal PostgreSQL service.
 3. Start the stack from the repository root:
 
    ```powershell
