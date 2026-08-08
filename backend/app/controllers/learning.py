@@ -32,7 +32,7 @@ async def create_learning_run(request: LearningRunRequest, db: AsyncSession = De
 @router.get("")
 async def list_learning_runs(db: AsyncSession = Depends(get_db), user: User = Depends(get_current_user)) -> list[dict]:
     rows = (await db.execute(select(AgentRun, LearningRequest).join(LearningRequest, AgentRun.learning_request_id == LearningRequest.id).where(LearningRequest.user_id == user.id).order_by(AgentRun.started_at.desc()))).all()
-    return [{"id": run.id, "topic": request.topic, "provider": run.provider, "status": run.status, "created_at": run.started_at} for run, request in rows]
+    return [{"id": run.id, "topic": request.topic, "harness": run.harness, "status": run.status, "created_at": run.started_at} for run, request in rows]
 
 
 async def _owned_run_or_404(run_id: str, db: AsyncSession, user: User) -> AgentRun:
@@ -77,7 +77,7 @@ async def get_learning_run_trace(
                 id=session.id,
                 run_id=run_id,
                 agent_name=session.agent_name,
-                provider=session.provider,
+                harness=session.harness,
                 status=session.status,
                 created_at=session.started_at,
                 duration_ms=session.duration_ms,

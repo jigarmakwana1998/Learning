@@ -3,8 +3,8 @@ from typing import Literal
 
 from pydantic import BaseModel, Field
 
-AgentProvider = Literal["codex", "gemini-cli", "antigravity-cli"]
-LIVE_AGENT_PROVIDERS: tuple[AgentProvider, ...] = (
+AgentHarness = Literal["codex", "gemini-cli", "antigravity-cli"]
+LIVE_AGENT_HARNESSES: tuple[AgentHarness, ...] = (
     "codex",
     "gemini-cli",
     "antigravity-cli",
@@ -22,8 +22,8 @@ class LearningRunRequest(LearningGoal):
     pass
 
 
-class AgentProviderSetting(BaseModel):
-    provider: AgentProvider
+class AgentHarnessSetting(BaseModel):
+    harness: AgentHarness
 
 
 class Source(BaseModel):
@@ -107,7 +107,7 @@ class Course(BaseModel):
 
 class LearningRun(BaseModel):
     id: str
-    provider: AgentProvider
+    harness: AgentHarness
     research: ResearchBrief
     curriculum: list[CurriculumModule]
     course: Course | None = None

@@ -9,16 +9,16 @@ def auth(client: TestClient, email: str = "learner@example.com") -> dict[str, st
     return {"Authorization": f"Bearer {token}"}
 
 
-def test_removed_offline_provider_is_rejected():
+def test_removed_offline_harness_is_rejected():
     with TestClient(app) as client:
         token = client.post(
             "/auth/login",
             json={"email": "admin@example.com", "password": "AdminPass123!"},
         ).json()["access_token"]
         response = client.put(
-            "/analytics/settings/agent-provider",
+            "/analytics/settings/agent-harness",
             headers={"Authorization": f"Bearer {token}"},
-            json={"provider": "mock"},
+            json={"harness": "mock"},
         )
         assert response.status_code == 422
 
@@ -32,4 +32,4 @@ def test_analytics_is_admin_only():
         assert client.get("/analytics/overview", headers=headers).status_code == 200
         assert client.get("/analytics/users", headers=headers).status_code == 200
         assert client.get("/analytics/requests?status=completed", headers=headers).status_code == 200
-        assert client.get("/analytics/sessions?provider=gemini-cli", headers=headers).status_code == 200
+        assert client.get("/analytics/sessions?harness=gemini-cli", headers=headers).status_code == 200

@@ -27,6 +27,9 @@ class FakeDb:
                 self._next_id += 1
                 record.id = f"research-{self._next_id}"
 
+    async def scalar(self, _statement):
+        return 0
+
 
 class FakeGateway:
     def __init__(self) -> None:
@@ -128,9 +131,27 @@ class FakePlainRuntime:
 async def test_browser_research_is_bounded_grounded_and_body_free_in_audit(monkeypatch):
     gateway = FakeGateway()
     calls: list[str] = []
+
+    class FakeHarness:
+        def __init__(self, harness: str, db: FakeDb):
+            self.harness, self.db = harness, db
+
+        async def start_and_run(self, run_id: str, role: str, prompt: str):
+            execution = await FakePlainRuntime(role, calls).execute(prompt)
+            session = AgentSessionRecord(
+                agent_run_id=run_id,
+                agent_name=role,
+                harness=self.harness,
+                status="completed",
+                output_payload=execution.payload,
+            )
+            self.db.add(session)
+            await self.db.flush()
+            return session, execution.payload
+
     monkeypatch.setattr(
-        "app.services.learning_service.get_runtime",
-        lambda _provider, role: FakePlainRuntime(role, calls),
+        "app.services.learning_service.AgentHarness",
+        FakeHarness,
     )
     service = LearningService()
     service.browser_gateway_factory = lambda: gateway

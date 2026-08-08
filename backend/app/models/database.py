@@ -44,7 +44,9 @@ class AgentRun(Base):
     __tablename__ = "agent_runs"
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid4()))
     learning_request_id: Mapped[str] = mapped_column(ForeignKey("learning_requests.id"), index=True)
-    provider: Mapped[str] = mapped_column(String(32), index=True)
+    # The physical column keeps its historical name for migration compatibility.
+    # The value identifies an agent harness, never an LLM provider.
+    harness: Mapped[str] = mapped_column("provider", String(32), index=True)
     status: Mapped[str] = mapped_column(String(16), default="running", index=True)
     result: Mapped[dict | None] = mapped_column(JSON, nullable=True)
     started_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
@@ -90,7 +92,7 @@ class AgentSessionRecord(Base):
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid4()))
     agent_run_id: Mapped[str] = mapped_column(ForeignKey("agent_runs.id"), index=True)
     agent_name: Mapped[str] = mapped_column(String(32), index=True)
-    provider: Mapped[str] = mapped_column(String(32))
+    harness: Mapped[str] = mapped_column("provider", String(32))
     status: Mapped[str] = mapped_column(String(16), default="active", index=True)
     input_payload: Mapped[dict | None] = mapped_column(JSON, nullable=True)
     output_payload: Mapped[dict | None] = mapped_column(JSON, nullable=True)
@@ -120,3 +122,24 @@ class McpToolInvocation(Base):
     error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
     duration_ms: Mapped[int | None] = mapped_column(Integer, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
+
+
+class AgentTraceEvent(Base):
+    """Append-only observability record for every model and tool boundary."""
+    __tablename__ = "agent_trace_events"
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid4()))
+    run_id: Mapped[str] = mapped_column(ForeignKey("agent_runs.id"), index=True)
+    session_id: Mapped[str] = mapped_column(ForeignKey("agent_sessions.id"), index=True)
+    sequence: Mapped[int] = mapped_column(Integer)
+    event_type: Mapped[str] = mapped_column(String(24), index=True)
+    name: Mapped[str] = mapped_column(String(120))
+    status: Mapped[str] = mapped_column(String(16), default="completed", index=True)
+    input_payload: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    output_payload: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    metadata_json: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
+    duration_ms: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    prompt_tokens: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    completion_tokens: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    total_cost_usd: Mapped[float | None] = mapped_column(nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now, index=True)

@@ -19,6 +19,10 @@ def test_only_learning_browser_mcp_server_is_allowed_and_registered():
     settings = _settings()
 
     assert settings["general"]["plan"]["modelRouting"] is False
+    assert settings["security"]["auth"] == {
+        "selectedType": "gemini-api-key",
+        "enforcedType": "gemini-api-key",
+    }
     assert settings["mcp"] == {
         "allowed": ["learning-browser"],
         "autoAllowInHeadless": True,

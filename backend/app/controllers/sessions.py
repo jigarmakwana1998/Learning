@@ -23,7 +23,7 @@ async def owned_session(db: AsyncSession, user: User, session_id: str) -> AgentS
 
 async def serialize(db: AsyncSession, session: AgentSessionRecord) -> AgentSessionResponse:
     entries = (await db.scalars(select(TranscriptEntryRecord).where(TranscriptEntryRecord.session_id == session.id).order_by(TranscriptEntryRecord.sequence))).all()
-    return AgentSessionResponse(id=session.id, run_id=session.agent_run_id, agent_name=session.agent_name, provider=session.provider, status=session.status, created_at=session.started_at, transcript=[TranscriptEntryResponse(role=item.role, content=decrypt(item.encrypted_content), created_at=item.created_at) for item in entries])
+    return AgentSessionResponse(id=session.id, run_id=session.agent_run_id, agent_name=session.agent_name, harness=session.harness, status=session.status, created_at=session.started_at, transcript=[TranscriptEntryResponse(role=item.role, content=decrypt(item.encrypted_content), created_at=item.created_at) for item in entries])
 
 
 @router.get("/{session_id}", response_model=AgentSessionResponse)
@@ -34,7 +34,7 @@ async def get_session(session_id: str, db: AsyncSession = Depends(get_db), user:
 @router.post("/{session_id}/resume", response_model=AgentSessionResponse)
 async def resume_session(session_id: str, request: ResumeSessionRequest, db: AsyncSession = Depends(get_db), user: User = Depends(get_current_user)) -> AgentSessionResponse:
     session = await owned_session(db, user, session_id)
-    try: await AgentHarness(session.provider, db).resume_and_run(session.id, request.prompt); await db.commit()
+    try: await AgentHarness(session.harness, db).resume_and_run(session.id, request.prompt); await db.commit()
     except (ValueError, RuntimeError) as error: await db.rollback(); raise HTTPException(status_code=422, detail=str(error)) from error
     return await serialize(db, session)
 
@@ -42,5 +42,5 @@ async def resume_session(session_id: str, request: ResumeSessionRequest, db: Asy
 @router.post("/{session_id}/close", response_model=AgentSessionResponse)
 async def close_session(session_id: str, db: AsyncSession = Depends(get_db), user: User = Depends(get_current_user)) -> AgentSessionResponse:
     session = await owned_session(db, user, session_id)
-    await AgentHarness(session.provider, db).close(session.id); await db.commit()
+    await AgentHarness(session.harness, db).close(session.id); await db.commit()
     return await serialize(db, session)

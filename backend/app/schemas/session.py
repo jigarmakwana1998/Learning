@@ -11,7 +11,7 @@ class TranscriptEntryResponse(BaseModel):
 class AgentSessionResponse(BaseModel):
     id: str
     agent_name: str
-    provider: str
+    harness: str
     status: str
     created_at: datetime
     transcript: list[TranscriptEntryResponse]

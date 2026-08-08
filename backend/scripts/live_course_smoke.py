@@ -18,7 +18,7 @@ from dotenv import load_dotenv
 BACKEND_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(BACKEND_ROOT))
 load_dotenv(BACKEND_ROOT / ".env")
-os.environ["AGENT_PROVIDER"] = "gemini-cli"
+os.environ["AGENT_HARNESS"] = "gemini-cli"
 os.environ["DATABASE_URL"] = "sqlite+aiosqlite:///./learning_live_smoke.db"
 os.environ["LOCAL_AUTH"] = "true"
 os.environ["SUPABASE_URL"] = ""
@@ -62,7 +62,7 @@ def main() -> None:
         lessons = [lesson for module in modules for lesson in module["lessons"]]
         summary = {
             "run_id": course["id"],
-            "provider": course["provider"],
+            "harness": course["harness"],
             "topic": course["research"]["topic"],
             "sources": [
                 {"title": source["title"], "url": source["url"], "kind": source["kind"]}

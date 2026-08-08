@@ -1,7 +1,8 @@
+import os
+
 from alembic import context
 from sqlalchemy import engine_from_config, pool
 
-from app.core.config import get_settings
 from app.models.database import Base
 
 config = context.config
@@ -10,7 +11,7 @@ target_metadata = Base.metadata
 
 def migration_database_url() -> str:
     """Use Alembic's synchronous drivers for the app's async DB URL."""
-    url = get_settings().database_url
+    url = os.getenv("DATABASE_URL", "sqlite+aiosqlite:///./learning_coach.db")
     return url.replace("postgresql+asyncpg://", "postgresql+psycopg://", 1).replace("sqlite+aiosqlite://", "sqlite://", 1)
 
 

@@ -30,12 +30,13 @@ export type QuizQuestion = {
 };
 export type QuizResult = { scorePercent?: number; feedback: string; passed?: boolean; recommendation?: string };
 export type SubmissionResult = { submissionId?: string; feedback: string; scorePercent?: number; status?: string; recommendation?: string };
+export type AgentHarness = "codex" | "gemini-cli" | "antigravity-cli";
 type ApiQuizQuestion = { id: string; prompt: string; type?: QuizQuestion["type"]; options?: string[]; choices?: string[]; explanation?: string };
 type AssignmentPrompt = { title?: string; prompt: string; deliverables?: string[]; rubric?: string[] };
 
 export type LearningRun = {
   id: string;
-  provider: "codex" | "gemini-cli" | "antigravity-cli";
+  harness: AgentHarness;
   research: { topic: string; sources: Source[]; visited_sources?: SourceVisit[] };
   // `course` is the richer v2 response. `curriculum` remains supported for existing API responses.
   course?: { title?: string; modules: ApiModule[] };
@@ -78,7 +79,7 @@ export type AgentTrace = {
   sessions: Array<{
     id: string;
     agent_name: string;
-    provider: string;
+    harness: AgentHarness;
     status: string;
     duration_ms?: number;
     transcript: Array<{ role: string; content: string; created_at: string }>;
@@ -92,6 +93,19 @@ export type AgentTrace = {
     }>;
   }>;
 };
+
+export type TraceEvent = {
+  id: string; session_id: string; sequence: number; event_type: "lifecycle" | "harness" | "model" | "tool";
+  name: string; status: "started" | "completed" | "failed"; input_payload: Record<string, unknown> | null;
+  output_payload: Record<string, unknown> | null; metadata: Record<string, unknown> | null;
+  error_message: string | null; duration_ms: number | null; prompt_tokens: number | null;
+  completion_tokens: number | null; total_cost_usd: number | null; created_at: string;
+};
+export type TraceRun = {
+  id: string; topic: string; harness: string; status: string; started_at: string; event_count: number;
+  total_cost_usd: number; sessions: Array<{ id: string; agent_name: string; status: string }>; events: TraceEvent[];
+};
+export type TraceRunListItem = Omit<TraceRun, "sessions" | "events">;
 
 export function quizQuestions(run: LearningRun): QuizQuestion[] {
   if (run.assessment.quiz_items?.length) return run.assessment.quiz_items.map((item) => ({ id: item.id, prompt: item.prompt, type: item.type ?? ((item.options ?? item.choices)?.length ? "multiple_choice" : "short_answer"), options: item.options ?? item.choices, explanation: item.explanation }));
@@ -124,6 +138,8 @@ export const register = (email: string, password: string) => request<{ access_to
 export const getMe = (token: string) => request<User>("/auth/me", {}, token);
 export const createLearningRun = (intent: TopicIntent, token: string) => request<LearningRun>("/learning-runs", { method: "POST", body: JSON.stringify({ topic: intent.topic, level: intent.level, hours_per_week: intent.hoursPerWeek, weeks: intent.weeks }) }, token);
 export const getLearningRunTrace = (runId: string, token: string) => request<AgentTrace>(`/learning-runs/${runId}/trace`, {}, token);
+export const getTraceRuns = (token: string) => request<TraceRunListItem[]>("/observability/runs", {}, token);
+export const getTraceRun = (runId: string, token: string) => request<TraceRun>(`/observability/runs/${runId}`, {}, token);
 export const saveLessonProgress = (runId: string, lessonId: string, completed: boolean, token: string) => request<{ completed?: boolean }>(`/learning-runs/${runId}/progress`, { method: "PATCH", body: JSON.stringify({ lesson_id: lessonId, completed }) }, token);
 export async function submitQuiz(runId: string, quizId: string, answers: Array<{ questionId: string; answer: string }>, token: string): Promise<QuizResult> {
   const data = await request<{ score_percent?: number; scorePercent?: number; feedback?: Array<{ correct?: boolean; explanation?: string }> | string; passed?: boolean; recommendation?: string }>(`/learning-runs/${runId}/quiz-submissions`, { method: "POST", body: JSON.stringify({ quiz_id: quizId, answers: answers.map(({ questionId, answer }) => ({ question_id: questionId, answer })) }) }, token);
