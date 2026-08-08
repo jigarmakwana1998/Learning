@@ -7,7 +7,7 @@ from app.schemas.learning import LearningRunRequest
 from app.services.learning_service import LearningService
 
 
-SOURCE_KINDS = ("documentation", "paper", "book", "lecture", "article", "repository")
+SOURCE_KINDS = ("documentation", "paper", "book", "lecture", "slides", "article", "repository")
 
 
 def source(index: int, url: str | None = None) -> dict:
@@ -16,6 +16,10 @@ def source(index: int, url: str | None = None) -> dict:
         "url": url or f"https://docs.example.com/source-{index}",
         "kind": SOURCE_KINDS[index % len(SOURCE_KINDS)],
         "rationale": f"Evidence for part {index}",
+        "key_points": [
+            f"Concrete source-backed mechanism for curriculum part {index}.",
+            f"Specific limitation or worked example for curriculum part {index}.",
+        ],
     }
 
 
@@ -69,7 +73,7 @@ def test_rejects_a_brief_without_the_required_source_mix():
     for item in sources:
         item["kind"] = "documentation"
 
-    with pytest.raises(ValueError, match="must cover documentation, paper, book, lecture, and article"):
+    with pytest.raises(ValueError, match="must cover documentation, paper, book, article, and repository"):
         LearningService._verified_research(research_output(sources))
 
 

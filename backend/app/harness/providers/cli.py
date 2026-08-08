@@ -395,6 +395,28 @@ class CliRuntime:
             metadata["domains"] = domains
         if result_count is not None:
             metadata["result_count"] = result_count
+        page_results: list[dict[str, str]] = []
+        for payload in cls._gateway_payloads(output):
+            pages = payload.get("pages")
+            if not isinstance(pages, list):
+                continue
+            for page in pages:
+                if not isinstance(page, dict):
+                    continue
+                normalized = cls._normalize_public_url(
+                    str(page.get("url") or page.get("requested_url") or "")
+                )
+                if normalized:
+                    page_results.append(
+                        {
+                            "url": normalized,
+                            "status": "read"
+                            if str(page.get("status", "")).casefold() == "ok"
+                            else "unavailable",
+                        }
+                    )
+        if page_results:
+            metadata["page_results"] = page_results[:20]
         return metadata
 
     @classmethod
@@ -408,7 +430,7 @@ class CliRuntime:
                 for item in items:
                     if not isinstance(item, dict):
                         continue
-                    for url_key in ("url", "final_url"):
+                    for url_key in ("url", "final_url", "requested_url"):
                         normalized = cls._normalize_public_url(str(item.get(url_key, "")))
                         if normalized:
                             urls.add(normalized)

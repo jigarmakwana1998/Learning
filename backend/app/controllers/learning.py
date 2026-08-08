@@ -4,13 +4,21 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import get_db
 from app.core.dependencies import get_current_user
-from app.models.database import AgentRun, LearningRequest, User
+from app.core.security import decrypt
+from app.models.database import (
+    AgentRun, AgentSessionRecord, LearningRequest, McpToolInvocation,
+    TranscriptEntryRecord, User,
+)
 from app.schemas.learning import (
     AssignmentSubmissionResponse, EvaluationRequest, EvaluationResponse, LearningProgressRequest,
     LearningProgressResponse, LearningRun, LearningRunRequest, QuizSubmissionRequest,
     QuizSubmissionResponse, WorkSubmissionRequest,
 )
 from app.services.learning_service import learning_service
+from app.schemas.session import (
+    LearningRunTraceResponse, RunTraceSessionResponse, ToolInvocationResponse,
+    TranscriptEntryResponse,
+)
 
 router = APIRouter(prefix="/learning-runs", tags=["learning"])
 
@@ -32,6 +40,69 @@ async def _owned_run_or_404(run_id: str, db: AsyncSession, user: User) -> AgentR
     if not run:
         raise HTTPException(status_code=404, detail="Learning run not found")
     return run
+
+
+@router.get("/{run_id}/trace", response_model=LearningRunTraceResponse)
+async def get_learning_run_trace(
+    run_id: str,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+) -> LearningRunTraceResponse:
+    await _owned_run_or_404(run_id, db, user)
+    sessions = (
+        await db.scalars(
+            select(AgentSessionRecord)
+            .where(AgentSessionRecord.agent_run_id == run_id)
+            .order_by(AgentSessionRecord.started_at, AgentSessionRecord.id)
+        )
+    ).all()
+    items: list[RunTraceSessionResponse] = []
+    for session in sessions:
+        transcript = (
+            await db.scalars(
+                select(TranscriptEntryRecord)
+                .where(TranscriptEntryRecord.session_id == session.id)
+                .order_by(TranscriptEntryRecord.sequence, TranscriptEntryRecord.created_at)
+            )
+        ).all()
+        tools = (
+            await db.scalars(
+                select(McpToolInvocation)
+                .where(McpToolInvocation.session_id == session.id)
+                .order_by(McpToolInvocation.created_at, McpToolInvocation.id)
+            )
+        ).all()
+        items.append(
+            RunTraceSessionResponse(
+                id=session.id,
+                run_id=run_id,
+                agent_name=session.agent_name,
+                provider=session.provider,
+                status=session.status,
+                created_at=session.started_at,
+                duration_ms=session.duration_ms,
+                transcript=[
+                    TranscriptEntryResponse(
+                        role=entry.role,
+                        content=decrypt(entry.encrypted_content),
+                        created_at=entry.created_at,
+                    )
+                    for entry in transcript
+                ],
+                tool_invocations=[
+                    ToolInvocationResponse(
+                        tool_name=tool.tool_name,
+                        status=tool.status,
+                        duration_ms=tool.duration_ms,
+                        metadata=tool.metadata_json,
+                        error=tool.error_message,
+                        created_at=tool.created_at,
+                    )
+                    for tool in tools
+                ],
+            )
+        )
+    return LearningRunTraceResponse(run_id=run_id, sessions=items)
 
 
 @router.get("/{run_id}", response_model=LearningRun, response_model_exclude_none=True)

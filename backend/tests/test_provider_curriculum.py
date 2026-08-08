@@ -14,6 +14,10 @@ def _research() -> ResearchBrief:
                 url=f"https://docs.example.com/source-{index}",
                 kind=kinds[index % len(kinds)],
                 rationale=f"Supports the progressive lesson section numbered {index}.",
+                key_points=[
+                    f"Explains the concrete mechanism used in section {index}.",
+                    f"Provides a worked example or limitation for section {index}.",
+                ],
             )
             for index in range(8)
         ],
@@ -21,15 +25,36 @@ def _research() -> ResearchBrief:
 
 
 def _lesson(identifier: str, *, source_urls: list[str] | None = None) -> dict:
+    paragraphs = [
+        {
+            "text": (
+                f"Paragraph {index} for {identifier} develops a distinct part of the function model. "
+                f"Mechanism {index} explains how Python binds an argument to a parameter, evaluates expressions inside local "
+                f"scope, and returns an observable value to the caller in example {index}. A worked example for case {index} "
+                f"follows one input through the function body, compares the predicted result with the actual result, and "
+                f"identifies the exact assumption that boundary case {index} can test. The explanation distinguishes local "
+                f"names from caller-owned values and shows why return is different from printing for scenario {index}. It then "
+                f"connects that mechanism to a practical debugging decision, including what evidence to record when result "
+                f"{index} differs from the prediction. A limitation specific to example {index} shows how invalid inputs can "
+                f"violate the function contract and why a deliberate error is preferable to a misleading result. Finally, the "
+                f"paragraph gives a validation checkpoint for mechanism {index} so the learner can explain the behavior without "
+                f"copying syntax. The learner then changes one variable in scenario {index}, predicts the consequence, and "
+                f"uses the observed value to revise the mental model. This makes paragraph {index} a separate teaching unit "
+                f"rather than repeated filler. A final comparison for scenario {index} contrasts the expected control flow "
+                f"with a nearby alternative, explains which observation would distinguish them, and connects that evidence "
+                f"back to the function contract the learner is testing."
+            ),
+            "source_urls": [
+                f"https://docs.example.com/source-{index % 2}",
+            ],
+        }
+        for index in range(6)
+    ]
     return {
         "id": identifier,
         "title": f"Lesson {identifier}",
         "objective": "Explain a concrete mechanism and validate its observable result.",
-        "content": (
-            f"PROVIDER CONTENT {identifier}: This is an intentionally specific explanation of function parameters, "
-            "local bindings, return values, and caller-visible results. It traces a worked example from an input through "
-            "the function body to an output, then explains a limitation and how a boundary check exposes it. "
-        ) * 8,
+        "paragraphs": paragraphs,
         "practice": "Implement the worked example, change one input, predict the result, and compare it with the output.",
         "estimated_minutes": 45,
         **({"source_urls": source_urls} if source_urls is not None else {}),
@@ -73,9 +98,15 @@ def test_provider_course_preserves_authored_content_and_normalizes_verified_cita
 
     module = curriculum[0]
     assert module.source_urls == ["https://docs.example.com/source-0"]
-    assert module.lessons[0].content.startswith("PROVIDER CONTENT one")
-    assert module.lessons[0].source_urls == module.source_urls
-    assert module.lessons[1].source_urls == ["https://docs.example.com/source-1"]
+    assert module.lessons[0].content.startswith("Paragraph 0 for one")
+    assert module.lessons[0].source_urls == [
+        "https://docs.example.com/source-0",
+        "https://docs.example.com/source-1",
+    ]
+    assert module.lessons[1].source_urls == [
+        "https://docs.example.com/source-1",
+        "https://docs.example.com/source-0",
+    ]
 
 
 def test_provider_course_rejects_any_unverified_module_or_lesson_citation():

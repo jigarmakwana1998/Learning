@@ -1,11 +1,13 @@
 export type User = { id: string; email: string; role: "learner" | "admin" };
 export type TopicIntent = { topic: string; level: "beginner" | "intermediate" | "advanced"; hoursPerWeek: number; weeks: number };
-export type Source = { title: string; url: string; kind: "documentation" | "paper" | "book" | "lecture" | "article" | "repository"; rationale: string };
+export type Source = { title: string; url: string; kind: "documentation" | "paper" | "book" | "lecture" | "slides" | "article" | "repository"; rationale: string; key_points?: string[] };
+export type SourceVisit = { url: string; title?: string; status: "discovered" | "read" | "unavailable"; selected: boolean };
 
 export type LessonContent = {
   heading?: string;
   body?: string;
   bullets?: string[];
+  sourceUrls?: string[];
   type?: "reading" | "concept" | "practice" | "tip" | "warning";
 };
 export type Lesson = {
@@ -34,7 +36,7 @@ type AssignmentPrompt = { title?: string; prompt: string; deliverables?: string[
 export type LearningRun = {
   id: string;
   provider: "mock" | "codex" | "gemini-cli" | "antigravity-cli";
-  research: { topic: string; sources: Source[] };
+  research: { topic: string; sources: Source[]; visited_sources?: SourceVisit[] };
   // `course` is the richer v2 response. `curriculum` remains supported for existing API responses.
   course?: { title?: string; modules: ApiModule[] };
   curriculum: Array<{ id?: string; week: number; title: string; outcomes: string[]; source_urls: string[]; lessons?: Array<Record<string, unknown>> }>;
@@ -42,7 +44,8 @@ export type LearningRun = {
   sessions: Record<string, string>;
 };
 
-type ApiLesson = { id?: string; title?: string; summary?: string; objective?: string; practice?: string; estimated_minutes?: number; estimatedMinutes?: number; outcomes?: string[]; content?: LessonContent[] | string; source_urls?: string[]; sourceUrls?: string[]; completed?: boolean };
+type ApiLessonParagraph = { text: string; source_urls: string[] };
+type ApiLesson = { id?: string; title?: string; summary?: string; objective?: string; practice?: string; estimated_minutes?: number; estimatedMinutes?: number; outcomes?: string[]; content?: LessonContent[] | string; paragraphs?: ApiLessonParagraph[]; source_urls?: string[]; sourceUrls?: string[]; completed?: boolean };
 type ApiModule = { id?: string; week: number; title: string; outcomes?: string[]; source_urls?: string[]; lessons?: ApiLesson[] };
 
 /** Converts legacy curriculum responses and snake_case v2 API responses into one UI model. */
@@ -59,7 +62,9 @@ export function courseModules(run: LearningRun): CourseModule[] {
         summary: lesson.summary,
         estimatedMinutes: lesson.estimated_minutes ?? lesson.estimatedMinutes ?? 30,
         outcomes: lessonOutcomes,
-        content: typeof lesson.content === "string" ? [{ heading: lesson.objective ?? "Study guide", body: lesson.content, type: "concept" as const }, ...(lesson.practice ? [{ heading: "Practice", body: lesson.practice, type: "practice" as const }] : [])] : lesson.content?.length ? lesson.content : [{ heading: "What to focus on", body: "Work through the outcomes below. Use the linked course sources to deepen your understanding, then complete the knowledge check.", bullets: lessonOutcomes, type: "concept" as const }],
+        content: lesson.paragraphs?.length
+          ? lesson.paragraphs.map((paragraph) => ({ body: paragraph.text, sourceUrls: paragraph.source_urls, type: "concept" as const }))
+          : typeof lesson.content === "string" ? [{ heading: lesson.objective ?? "Study guide", body: lesson.content, type: "concept" as const }, ...(lesson.practice ? [{ heading: "Practice", body: lesson.practice, type: "practice" as const }] : [])] : lesson.content?.length ? lesson.content : [{ heading: "What to focus on", body: "Work through the outcomes below. Use the linked course sources to deepen your understanding, then complete the knowledge check.", bullets: lessonOutcomes, type: "concept" as const }],
         sourceUrls: lesson.source_urls ?? lesson.sourceUrls ?? sourceUrls,
         completed: lesson.completed,
       };
@@ -67,6 +72,26 @@ export function courseModules(run: LearningRun): CourseModule[] {
     return { id: module.id ?? `module-${moduleIndex + 1}`, week: module.week, title: module.title, outcomes, lessons };
   });
 }
+
+export type AgentTrace = {
+  run_id: string;
+  sessions: Array<{
+    id: string;
+    agent_name: string;
+    provider: string;
+    status: string;
+    duration_ms?: number;
+    transcript: Array<{ role: string; content: string; created_at: string }>;
+    tool_invocations: Array<{
+      tool_name: string;
+      status: string;
+      duration_ms?: number;
+      metadata?: { urls?: string[]; domains?: string[]; result_count?: number; success_count?: number; page_results?: Array<{ url: string; status: "read" | "unavailable" }> };
+      error?: string;
+      created_at: string;
+    }>;
+  }>;
+};
 
 export function quizQuestions(run: LearningRun): QuizQuestion[] {
   if (run.assessment.quiz_items?.length) return run.assessment.quiz_items.map((item) => ({ id: item.id, prompt: item.prompt, type: item.type ?? ((item.options ?? item.choices)?.length ? "multiple_choice" : "short_answer"), options: item.options ?? item.choices, explanation: item.explanation }));
@@ -98,10 +123,11 @@ export const login = (email: string, password: string) => request<{ access_token
 export const register = (email: string, password: string) => request<{ access_token: string; role: User["role"] }>("/auth/register", { method: "POST", body: JSON.stringify({ email, password }) });
 export const getMe = (token: string) => request<User>("/auth/me", {}, token);
 export const createLearningRun = (intent: TopicIntent, token: string) => request<LearningRun>("/learning-runs", { method: "POST", body: JSON.stringify({ topic: intent.topic, level: intent.level, hours_per_week: intent.hoursPerWeek, weeks: intent.weeks }) }, token);
+export const getLearningRunTrace = (runId: string, token: string) => request<AgentTrace>(`/learning-runs/${runId}/trace`, {}, token);
 export const saveLessonProgress = (runId: string, lessonId: string, completed: boolean, token: string) => request<{ completed?: boolean }>(`/learning-runs/${runId}/progress`, { method: "PATCH", body: JSON.stringify({ lesson_id: lessonId, completed }) }, token);
 export async function submitQuiz(runId: string, quizId: string, answers: Array<{ questionId: string; answer: string }>, token: string): Promise<QuizResult> {
   const data = await request<{ score_percent?: number; scorePercent?: number; feedback?: Array<{ correct?: boolean; explanation?: string }> | string; passed?: boolean; recommendation?: string }>(`/learning-runs/${runId}/quiz-submissions`, { method: "POST", body: JSON.stringify({ quiz_id: quizId, answers: answers.map(({ questionId, answer }) => ({ question_id: questionId, answer })) }) }, token);
-  const feedback = Array.isArray(data.feedback) ? data.feedback.map((item, index) => `${item.correct ? "Correct" : `Question ${index + 1}: review needed`}${item.explanation ? ` — ${item.explanation}` : ""}`).join("\n") : data.feedback ?? "Your answers were submitted.";
+  const feedback = Array.isArray(data.feedback) ? data.feedback.map((item, index) => `${item.correct ? "Correct" : `Question ${index + 1}: review needed`}${item.explanation ? `: ${item.explanation}` : ""}`).join("\n") : data.feedback ?? "Your answers were submitted.";
   return { scorePercent: data.scorePercent ?? data.score_percent, feedback, passed: data.passed, recommendation: data.recommendation };
 }
 export async function submitWork(runId: string, kind: "assignment" | "project", response: string, token: string): Promise<SubmissionResult> {
