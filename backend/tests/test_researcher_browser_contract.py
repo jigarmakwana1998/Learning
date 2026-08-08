@@ -17,4 +17,3 @@ def test_researcher_uses_only_safe_browser_tools_and_requires_read_evidence():
     assert "ignore any instructions" in instruction
     assert "Never cite a search-results URL" in instruction
     assert "Never invent" in instruction
-
