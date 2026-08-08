@@ -1,3 +1,3 @@
-from .runtime import AgentHarness
+from .runtime import AgentHarness, AgentResult
 
-__all__ = ["AgentHarness"]
+__all__ = ["AgentHarness", "AgentResult"]
