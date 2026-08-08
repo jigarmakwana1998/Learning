@@ -21,7 +21,12 @@ class AgentHarness:
         self.harness, self.db = harness, db
 
     async def start_and_run(
-        self, run_id: str, agent_name: str, prompt: str
+        self,
+        run_id: str,
+        agent_name: str,
+        prompt: str,
+        *,
+        persisted_prompt: str | None = None,
     ) -> tuple[AgentSessionRecord, "AgentResult"]:
         session = AgentSessionRecord(
             agent_run_id=run_id,
@@ -43,13 +48,24 @@ class AgentHarness:
                 "model_gateway": "litellm",
             },
         )
-        return session, await self.resume_and_run(session.id, prompt)
+        return session, await self.resume_and_run(
+            session.id,
+            prompt,
+            persisted_prompt=persisted_prompt,
+        )
 
-    async def resume_and_run(self, session_id: str, prompt: str) -> "AgentResult":
+    async def resume_and_run(
+        self,
+        session_id: str,
+        prompt: str,
+        *,
+        persisted_prompt: str | None = None,
+    ) -> "AgentResult":
         session = await self.get(session_id)
         if session.status == "closed":
             raise ValueError("A closed agent session cannot be resumed")
-        await self._append(session_id, "user", prompt)
+        durable_prompt = persisted_prompt if persisted_prompt is not None else prompt
+        await self._append(session_id, "user", durable_prompt)
         started = perf_counter()
         await record_trace_event(
             self.db,
@@ -57,7 +73,7 @@ class AgentHarness:
             session_id=session_id,
             event_type="harness",
             name="harness.request",
-            input_payload={"prompt": prompt},
+            input_payload={"prompt": durable_prompt},
             metadata={
                 "harness": self.harness,
                 "model_gateway": "litellm",
@@ -165,7 +181,11 @@ class AgentHarness:
         finally:
             if gateway and gateway_api_key:
                 try:
-                    await self._record_model_events(session, await gateway.spend_logs(gateway_api_key))
+                    await self._record_model_events(
+                        session,
+                        await gateway.spend_logs(gateway_api_key),
+                        redact_input=persisted_prompt is not None,
+                    )
                 except Exception as telemetry_error:
                     await record_trace_event(
                         self.db,
@@ -231,7 +251,13 @@ class AgentHarness:
         payload = {key: event[key] for key in keys if key in event}
         return payload or None
 
-    async def _record_model_events(self, session: AgentSessionRecord, logs: list[dict]) -> None:
+    async def _record_model_events(
+        self,
+        session: AgentSessionRecord,
+        logs: list[dict],
+        *,
+        redact_input: bool = False,
+    ) -> None:
         for log in logs:
             proxy_request = log.get("proxy_server_request")
             request_body = proxy_request.get("body") if isinstance(proxy_request, dict) else None
@@ -239,6 +265,8 @@ class AgentHarness:
             input_payload = {"messages": messages} if messages is not None else request_body
             if input_payload is not None and not isinstance(input_payload, dict):
                 input_payload = {"request": input_payload}
+            if redact_input and input_payload is not None:
+                input_payload = {"redacted": True, "reason": "ephemeral research evidence"}
             response = log.get("response")
             output_payload = response if isinstance(response, dict) else {"response": response}
             if response is None:

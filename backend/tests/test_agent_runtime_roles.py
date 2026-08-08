@@ -1,3 +1,4 @@
+import json
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -113,7 +114,8 @@ async def test_harness_persists_sanitized_tools_but_not_internal_evidence(monkey
     )
 
     class Runtime:
-        async def execute(self, _prompt, **_kwargs):
+        async def execute(self, prompt, **_kwargs):
+            assert prompt == "UNTRUSTED_PAGE_BODY"
             return execution
 
     class Gateway:
@@ -121,7 +123,7 @@ async def test_harness_persists_sanitized_tools_but_not_internal_evidence(monkey
             return "test-trace-key"
 
         async def spend_logs(self, _api_key):
-            return []
+            return [{"messages": [{"role": "user", "content": "UNTRUSTED_PAGE_BODY"}]}]
 
     class Db:
         async def flush(self):
@@ -132,18 +134,20 @@ async def test_harness_persists_sanitized_tools_but_not_internal_evidence(monkey
         output_payload=None, error_message=None, completed_at=None, duration_ms=None,
     )
     audit_calls = []
+    appended = []
+    trace_calls = []
 
     async def get(_session_id):
         return session
 
-    async def append(*_args):
-        pass
+    async def append(*args):
+        appended.append(args)
 
     async def audit(*args, **kwargs):
         audit_calls.append((args, kwargs))
 
-    async def trace(*_args, **_kwargs):
-        pass
+    async def trace(*args, **kwargs):
+        trace_calls.append((args, kwargs))
 
     monkeypatch.setattr(runtime_module, "get_runtime", lambda *_args: Runtime())
     monkeypatch.setattr(runtime_module, "LiteLLMGateway", Gateway)
@@ -153,7 +157,11 @@ async def test_harness_persists_sanitized_tools_but_not_internal_evidence(monkey
     monkeypatch.setattr(harness, "get", get)
     monkeypatch.setattr(harness, "_append", append)
 
-    result = await harness.resume_and_run("session-id", "research")
+    result = await harness.resume_and_run(
+        "session-id",
+        "UNTRUSTED_PAGE_BODY",
+        persisted_prompt="Ephemeral research evidence omitted.",
+    )
 
     assert result == {"topic": "Attention", "sources": []}
     assert result.visited_urls == frozenset({"https://example.com/paper"})
@@ -161,3 +169,9 @@ async def test_harness_persists_sanitized_tools_but_not_internal_evidence(monkey
     assert "visited_urls" not in session.output_payload
     assert audit_calls[0][0][2:5] == ("browser_read", "success", tool_event.metadata)
     assert audit_calls[0][1]["duration_ms"] == 25
+    assert appended[0][2] == "Ephemeral research evidence omitted."
+    assert "UNTRUSTED_PAGE_BODY" not in json.dumps(trace_calls, default=str)
+    assert any(
+        call[1].get("input_payload") == {"redacted": True, "reason": "ephemeral research evidence"}
+        for call in trace_calls
+    )

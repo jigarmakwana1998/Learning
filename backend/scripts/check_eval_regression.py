@@ -11,7 +11,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from app.agents.examiner import ExaminerAgent
 from app.agents.planner import PlannerAgent
-from app.agents.researcher import ResearcherAgent
+from app.agents.research_pipeline import ResearchSynthesisAgent
 
 
 def main() -> None:
@@ -27,7 +27,7 @@ def main() -> None:
         assert not missing, f"fixture {fixture.get('name', '<unnamed>')} is missing: {sorted(missing)}"
 
     instructions = {
-        "researcher": ResearcherAgent().instruction(),
+        "researcher": ResearchSynthesisAgent().instruction(),
         "planner": PlannerAgent().instruction(),
         "examiner": ExaminerAgent().instruction(),
     }

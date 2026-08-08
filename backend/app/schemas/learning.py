@@ -41,10 +41,34 @@ class SourceVisit(BaseModel):
     selected: bool = False
 
 
+class ResearchCoverage(BaseModel):
+    requirement_id: str
+    question: str
+    priority: Literal["core", "supporting"]
+    depth: Literal["overview", "detailed"]
+    evidence_policy: Literal["single_source_ok", "corroborate"]
+    status: Literal["covered", "partial", "missing"]
+    confidence: float = Field(ge=0, le=1)
+    supported_by: list[str] = Field(default_factory=list)
+    rationale: str = ""
+
+
+class ResearchStats(BaseModel):
+    rounds: int = 0
+    searches: int = 0
+    pages_attempted: int = 0
+    pages_read: int = 0
+    sources_selected: int = 0
+
+
 class ResearchBrief(BaseModel):
     topic: str
     sources: list[Source]
     visited_sources: list[SourceVisit] = Field(default_factory=list)
+    coverage: list[ResearchCoverage] = Field(default_factory=list)
+    stop_reason: Literal["coverage_satisfied", "budget_exhausted", "no_new_evidence"] | None = None
+    warnings: list[str] = Field(default_factory=list)
+    research_stats: ResearchStats = Field(default_factory=ResearchStats)
 
 
 class CurriculumModule(BaseModel):

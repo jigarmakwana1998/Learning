@@ -136,15 +136,20 @@ async def test_navigation_failure_still_closes_ephemeral_session():
 
 @pytest.mark.asyncio
 async def test_tool_quotas_are_enforced():
-    gateway = BrowserGateway(client=FakeBrowser(), resolver=public_resolver)
-    for query in ("one", "two", "three", "four", "five", "six", "seven", "eight", "nine", "ten"):
+    gateway = BrowserGateway(
+        client=FakeBrowser(), resolver=public_resolver,
+        max_searches=2, max_pages=3, max_actions=5,
+    )
+    for query in ("one", "two"):
         assert (await gateway.browser_search(query))["status"] == "ok"
-    result = await gateway.browser_search("eleven")
+    result = await gateway.browser_search("three")
     assert result["error"]["code"] == "quota_exceeded"
 
-    second = BrowserGateway(client=FakeBrowser(), resolver=public_resolver)
-    for index in range(3):
-        assert (await second.browser_read([f"https://example.com/{index}-{offset}" for offset in range(4)]))["status"] == "ok"
+    second = BrowserGateway(
+        client=FakeBrowser(), resolver=public_resolver,
+        max_searches=2, max_pages=3, max_actions=5,
+    )
+    assert (await second.browser_read([f"https://example.com/0-{offset}" for offset in range(3)]))["status"] == "ok"
     result = await second.browser_read(["https://example.com/too-many"])
     assert result["error"]["code"] == "quota_exceeded"
 

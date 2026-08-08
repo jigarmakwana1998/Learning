@@ -189,16 +189,16 @@ def test_provider_course_requires_exact_requested_progression_and_weekly_budget(
         )
 
 
-def test_provider_modules_require_primary_evidence_and_bounded_lesson_time():
+def test_provider_modules_allow_the_relevant_verified_source_and_bound_lesson_time():
     research = _research()
     goal = LearningGoal(topic="Python functions", weeks=1, hours_per_week=3)
 
-    with pytest.raises(ValueError, match="must cite a verified primary source"):
-        LearningService._provider_curriculum(
-            goal,
-            _planner_output(module_urls=["https://docs.example.com/source-3"]),
-            research,
-        )
+    modules = LearningService._provider_curriculum(
+        goal,
+        _planner_output(module_urls=["https://docs.example.com/source-3"]),
+        research,
+    )
+    assert modules[0].source_urls == ["https://docs.example.com/source-3"]
 
     long_lessons = [_lesson("one"), _lesson("two")]
     for lesson in long_lessons:

@@ -78,21 +78,24 @@ class FakePlainRuntime:
         if self.role == "ResearchQueryPlanner":
             return SimpleNamespace(
                 payload={
+                    "coverage_requirements": [{
+                        "id": "core",
+                        "question": "How do transformers work in practice?",
+                        "priority": "core",
+                        "depth": "detailed",
+                        "evidence_policy": "single_source_ok",
+                    }],
                     "queries": [
-                        {"query": f"Lead{index} transformer evidence angle", "purpose": f"Coverage purpose {index}"}
-                        for index in range(8)
-                    ],
-                    "replacement_queries": [
-                        {"query": f"Replacement{index} transformer evidence", "purpose": f"Replacement purpose {index}"}
-                        for index in range(2)
+                        {"query": "transformer architecture authoritative guide", "purpose": "Cover the core mechanism", "coverage_ids": ["core"]}
                     ],
                     "seed_candidates": [
                         {
-                            "title": f"Seed {index}",
-                            "url": f"https://seeds.example.com/source-{index}",
-                            "purpose": f"Canonical evidence seed {index}",
+                            "title": "Canonical transformer guide",
+                            "url": "https://seeds.example.com/source-0",
+                            "purpose": "Canonical evidence for the core mechanism",
+                            "coverage_ids": ["core"],
+                            "kind": "documentation",
                         }
-                        for index in range(8)
                     ],
                 }
             )
@@ -100,12 +103,22 @@ class FakePlainRuntime:
             candidates = payload["context"]["candidates"]
             return SimpleNamespace(
                 payload={
-                    "selections": [
-                        {"url": item["url"], "kind": KINDS[index % len(KINDS)]}
-                        for index, item in enumerate(candidates[:12])
-                    ]
+                    "selections": [{"url": candidates[0]["url"], "kind": "documentation", "coverage_ids": ["core"]}]
                 }
             )
+        if self.role.startswith("ResearchCoverageRound"):
+            sources = payload["context"]["sources"]
+            return SimpleNamespace(payload={
+                "assessments": [{
+                    "requirement_id": "core",
+                    "status": "covered",
+                    "confidence": 0.95,
+                    "supported_by": [sources[0]["url"]],
+                    "rationale": "The canonical guide covers the required mechanism.",
+                }],
+                "sufficient": True,
+                "reason": "All requirements are covered.",
+            })
         pages = payload["context"]["pages"]
         return SimpleNamespace(
             payload={
@@ -118,8 +131,8 @@ class FakePlainRuntime:
                         "rationale": f"Grounds the course section using readable evidence {index}.",
                         "key_points": [
                             f"Explains a concrete mechanism from readable source {index}.",
-                            f"Provides a limitation or worked example from source {index}.",
                         ],
+                        "coverage_evidence": [{"requirement_id": "core", "support": "strong"}],
                     }
                     for index, page in enumerate(pages)
                 ],
@@ -136,14 +149,22 @@ async def test_browser_research_is_bounded_grounded_and_body_free_in_audit(monke
         def __init__(self, harness: str, db: FakeDb):
             self.harness, self.db = harness, db
 
-        async def start_and_run(self, run_id: str, role: str, prompt: str):
+        async def start_and_run(
+            self,
+            run_id: str,
+            role: str,
+            prompt: str,
+            *,
+            persisted_prompt: str | None = None,
+        ):
             execution = await FakePlainRuntime(role, calls).execute(prompt)
             session = AgentSessionRecord(
                 agent_run_id=run_id,
                 agent_name=role,
                 harness=self.harness,
                 status="completed",
-                output_payload=execution.payload,
+                    output_payload=execution.payload,
+                    input_payload={"prompt": persisted_prompt},
             )
             self.db.add(session)
             await self.db.flush()
@@ -167,21 +188,17 @@ async def test_browser_research_is_bounded_grounded_and_body_free_in_audit(monke
     assert session.agent_name == "ResearchSynthesisPart1"
     assert calls == [
         "ResearchQueryPlanner", "ResearchSelector",
-        "ResearchSynthesisPart1", "ResearchSynthesisPart2",
+        "ResearchSynthesisPart1", "ResearchCoverageRound1",
     ]
-    assert len(gateway.searches) == 8
-    assert len(gateway.read_batches) == 3
-    assert all(1 <= len(batch) <= 4 for batch in gateway.read_batches)
-    assert sum(map(len, gateway.read_batches)) == 12
-    assert len(research.sources) == 8
-    assert {source.kind for source in research.sources} >= {
-        "documentation", "paper", "book", "lecture", "article", "repository"
-    }
+    assert gateway.searches == []
+    assert gateway.read_batches == [["https://seeds.example.com/source-0"]]
+    assert len(research.sources) == 1
+    assert research.stop_reason == "coverage_satisfied"
+    assert research.coverage[0].status == "covered"
 
     audits = [item for item in db.added if isinstance(item, McpToolInvocation)]
     assert [item.tool_name for item in audits] == [
-        *(["browser_search"] * 8),
-        "browser_read", "browser_read", "browser_read"
+        "browser_read"
     ]
     assert all("content" not in json.dumps(item.metadata_json).casefold() for item in audits)
     assert all("UNTRUSTED_PAGE_BODY" not in json.dumps(item.metadata_json) for item in audits)
@@ -190,7 +207,7 @@ async def test_browser_research_is_bounded_grounded_and_body_free_in_audit(monke
         if isinstance(item, AgentSessionRecord) and item.agent_name == "BrowserResearch"
     )
     assert browser_session.status == "completed"
-    assert browser_session.output_payload["read_count"] == 8
+    assert browser_session.output_payload["read_count"] == 1
     persisted_sessions = [item for item in db.added if isinstance(item, AgentSessionRecord)]
     assert all(
         "UNTRUSTED_PAGE_BODY" not in json.dumps(

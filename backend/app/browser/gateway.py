@@ -10,15 +10,13 @@ from dataclasses import dataclass
 from typing import Any
 from urllib.parse import parse_qs, unquote, urljoin, urlsplit, urlencode
 
+from app.core.config import get_settings
+
 from .client import AgentBrowserClient, AgentBrowserError, output_text
 from .policy import UrlPolicyError, hostname_for_url, validate_public_https_url
 
-MAX_SEARCHES = 10
-MAX_PAGES = 12
 MAX_URLS_PER_READ = 4
 MAX_PAGE_CHARACTERS = 6000
-MAX_ACTIONS = 30
-MAX_ELAPSED_SECONDS = 180
 
 _MARKDOWN_LINK = re.compile(r"\[([^\]\n]{1,300})\]\((https?://[^\s)]+)\)")
 _SNAPSHOT_LINK = re.compile(
@@ -51,7 +49,12 @@ class BrowserGateway:
         client: AgentBrowserClient | None = None,
         resolver=None,
         clock=time.monotonic,
+        max_searches: int | None = None,
+        max_pages: int | None = None,
+        max_actions: int | None = None,
+        max_elapsed_seconds: int | None = None,
     ) -> None:
+        settings = get_settings()
         self.client = client or AgentBrowserClient()
         self._resolver = resolver
         self._clock = clock
@@ -59,6 +62,21 @@ class BrowserGateway:
         self._lock = asyncio.Lock()
         self._execution_id = uuid.uuid4().hex
         self._operation = 0
+        self._max_searches = max_searches if max_searches is not None else settings.research_max_searches
+        self._max_pages = max_pages if max_pages is not None else settings.research_max_pages
+        self._max_actions = max_actions if max_actions is not None else settings.research_max_actions
+        self._max_elapsed_seconds = (
+            max_elapsed_seconds
+            if max_elapsed_seconds is not None
+            else settings.research_max_elapsed_seconds
+        )
+        if min(
+            self._max_searches,
+            self._max_pages,
+            self._max_actions,
+            self._max_elapsed_seconds,
+        ) < 1:
+            raise ValueError("Browser research safety budgets must be positive.")
 
     async def browser_search(self, query: str, limit: int = 10) -> dict[str, Any]:
         """Search public pages without a search API and return validated HTTPS links."""
@@ -250,14 +268,14 @@ class BrowserGateway:
 
     async def _charge(self, *, searches: int = 0, pages: int = 0, actions: int = 0) -> None:
         async with self._lock:
-            if self._budget.elapsed_seconds >= MAX_ELAPSED_SECONDS:
-                raise RuntimeError("Browser research exceeded its 180-second time budget")
-            if self._budget.searches + searches > MAX_SEARCHES:
-                raise RuntimeError("Browser research allows at most 10 searches")
-            if self._budget.pages + pages > MAX_PAGES:
-                raise RuntimeError("Browser research allows at most 12 opened pages")
-            if self._budget.actions + actions > MAX_ACTIONS:
-                raise RuntimeError(f"Browser research allows at most {MAX_ACTIONS} actions")
+            if self._budget.elapsed_seconds >= self._max_elapsed_seconds:
+                raise RuntimeError("Browser research exceeded its configured time budget")
+            if self._budget.searches + searches > self._max_searches:
+                raise RuntimeError("Browser research exceeded its configured search budget")
+            if self._budget.pages + pages > self._max_pages:
+                raise RuntimeError("Browser research exceeded its configured page budget")
+            if self._budget.actions + actions > self._max_actions:
+                raise RuntimeError("Browser research exceeded its configured action budget")
             self._budget.searches += searches
             self._budget.pages += pages
             self._budget.actions += actions
@@ -274,7 +292,7 @@ class BrowserGateway:
                 if self._budget.active_started_at is not None
                 else 0.0
             )
-            remaining = MAX_ELAPSED_SECONDS - self._budget.elapsed_seconds - active_elapsed
+            remaining = self._max_elapsed_seconds - self._budget.elapsed_seconds - active_elapsed
             if remaining <= 0:
                 raise AgentBrowserError("browser research time budget expired")
             if self._budget.active_batches == 0:
