@@ -11,10 +11,12 @@ from app.harness.runtime import AgentHarness
 
 def test_researcher_gemini_enables_only_learning_browser(monkeypatch):
     monkeypatch.delenv("GEMINI_CLI_COMMAND", raising=False)
+    monkeypatch.delenv("GEMINI_MODEL", raising=False)
 
     runtime = get_runtime("gemini-cli", "Researcher")
 
     assert runtime.stream_json is True
+    assert runtime.command[runtime.command.index("--model") + 1] == "gemini-3.1-flash-lite"
     assert "stream-json" in runtime.command
     assert runtime.command[runtime.command.index("--allowed-mcp-server-names") + 1] == "learning-browser"
     assert runtime.command[runtime.command.index("--allowed-tools") + 1] == (
@@ -55,8 +57,9 @@ def test_non_researcher_gemini_disables_browser_and_uses_json(monkeypatch):
         assert runtime.stream_json is False
         assert "stream-json" not in runtime.command
         assert "json" in runtime.command
-        assert runtime.command[-1] == "browser-disabled"
+        assert runtime.command[runtime.command.index("--allowed-mcp-server-names") + 1] == "browser-disabled"
         assert "--allowed-tools" not in runtime.command
+        assert runtime.timeout_seconds == 300
 
 
 def test_other_provider_commands_are_unchanged(monkeypatch):
@@ -69,6 +72,7 @@ def test_other_provider_commands_are_unchanged(monkeypatch):
 
 def test_gemini_command_override_cannot_omit_role_safety_flags(monkeypatch):
     monkeypatch.setenv("GEMINI_CLI_COMMAND", "custom-gemini --model fast")
+    monkeypatch.setenv("GEMINI_MODEL", "gemini-2.5-flash")
 
     runtime = get_runtime("gemini-cli", "Researcher")
 
@@ -78,6 +82,15 @@ def test_gemini_command_override_cannot_omit_role_safety_flags(monkeypatch):
         "--allowed-mcp-server-names", "learning-browser",
         "--allowed-tools", "mcp_learning-browser_browser_search,mcp_learning-browser_browser_read",
     ]
+
+
+def test_gemini_model_can_be_overridden_without_shell_parsing(monkeypatch):
+    monkeypatch.delenv("GEMINI_CLI_COMMAND", raising=False)
+    monkeypatch.setenv("GEMINI_MODEL", "gemini-3-flash-preview")
+
+    runtime = get_runtime("gemini-cli", "Planner")
+
+    assert runtime.command[runtime.command.index("--model") + 1] == "gemini-3-flash-preview"
 
 
 @pytest.mark.asyncio

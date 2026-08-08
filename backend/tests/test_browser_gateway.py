@@ -5,7 +5,6 @@ import pytest
 
 from app.browser.client import AgentBrowserClient, AgentBrowserError
 from app.browser.gateway import BrowserGateway
-from app.browser.server import mcp
 from app.mcp.tools import RESEARCH_TOOLS
 
 
@@ -138,9 +137,9 @@ async def test_navigation_failure_still_closes_ephemeral_session():
 @pytest.mark.asyncio
 async def test_tool_quotas_are_enforced():
     gateway = BrowserGateway(client=FakeBrowser(), resolver=public_resolver)
-    for query in ("one", "two", "three", "four"):
+    for query in ("one", "two", "three", "four", "five", "six", "seven", "eight", "nine", "ten"):
         assert (await gateway.browser_search(query))["status"] == "ok"
-    result = await gateway.browser_search("five")
+    result = await gateway.browser_search("eleven")
     assert result["error"]["code"] == "quota_exceeded"
 
     second = BrowserGateway(client=FakeBrowser(), resolver=public_resolver)
@@ -150,12 +149,58 @@ async def test_tool_quotas_are_enforced():
     assert result["error"]["code"] == "quota_exceeded"
 
 
+@pytest.mark.asyncio
+async def test_browser_time_budget_excludes_idle_model_time():
+    now = [0.0]
+    gateway = BrowserGateway(
+        client=FakeBrowser(),
+        resolver=public_resolver,
+        clock=lambda: now[0],
+    )
+
+    now[0] = 10_000.0
+    result = await gateway.browser_search("attention transformers", 1)
+
+    assert result["status"] == "ok"
+
+
+@pytest.mark.asyncio
+async def test_parallel_browser_batches_count_overlapping_wall_time_once():
+    now = [0.0]
+    both_started = asyncio.Event()
+
+    class ParallelBrowser(FakeBrowser):
+        started = 0
+
+        async def run_batch(self, session, host, commands):
+            self.started += 1
+            if self.started == 2:
+                now[0] = 100.0
+                both_started.set()
+            else:
+                await both_started.wait()
+            return await super().run_batch(session, host, commands)
+
+    gateway = BrowserGateway(
+        client=ParallelBrowser(), resolver=public_resolver, clock=lambda: now[0]
+    )
+
+    await asyncio.gather(
+        gateway.browser_search("attention", 1),
+        gateway.browser_search("transformers", 1),
+    )
+
+    assert gateway._budget.elapsed_seconds == 100.0
+
+
 def test_only_two_research_tools_are_exposed():
     assert {tool.name for tool in RESEARCH_TOOLS} == {"browser_search", "browser_read"}
 
 
 @pytest.mark.asyncio
 async def test_stdio_mcp_server_exposes_only_safe_browser_tools():
+    from app.browser.server import mcp
+
     assert {tool.name for tool in await mcp.list_tools()} == {"browser_search", "browser_read"}
     assert {tool.name for tool in mcp._tool_manager.list_tools()} == {"browser_search", "browser_read"}
     for tool in await mcp.list_tools():

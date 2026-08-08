@@ -13,11 +13,11 @@ from urllib.parse import parse_qs, unquote, urljoin, urlsplit, urlencode
 from .client import AgentBrowserClient, AgentBrowserError, output_text
 from .policy import UrlPolicyError, hostname_for_url, validate_public_https_url
 
-MAX_SEARCHES = 4
+MAX_SEARCHES = 10
 MAX_PAGES = 12
 MAX_URLS_PER_READ = 4
 MAX_PAGE_CHARACTERS = 6000
-MAX_ACTIONS = 20
+MAX_ACTIONS = 30
 MAX_ELAPSED_SECONDS = 180
 
 _MARKDOWN_LINK = re.compile(r"\[([^\]\n]{1,300})\]\((https?://[^\s)]+)\)")
@@ -34,10 +34,12 @@ _RSS_ITEM = re.compile(
 
 @dataclass
 class _Budget:
-    started_at: float
     searches: int = 0
     pages: int = 0
     actions: int = 0
+    elapsed_seconds: float = 0.0
+    active_batches: int = 0
+    active_started_at: float | None = None
 
 
 class BrowserGateway:
@@ -53,7 +55,7 @@ class BrowserGateway:
         self.client = client or AgentBrowserClient()
         self._resolver = resolver
         self._clock = clock
-        self._budget = _Budget(started_at=clock())
+        self._budget = _Budget()
         self._lock = asyncio.Lock()
         self._execution_id = uuid.uuid4().hex
         self._operation = 0
@@ -248,14 +250,14 @@ class BrowserGateway:
 
     async def _charge(self, *, searches: int = 0, pages: int = 0, actions: int = 0) -> None:
         async with self._lock:
-            if self._clock() - self._budget.started_at >= MAX_ELAPSED_SECONDS:
+            if self._budget.elapsed_seconds >= MAX_ELAPSED_SECONDS:
                 raise RuntimeError("Browser research exceeded its 180-second time budget")
             if self._budget.searches + searches > MAX_SEARCHES:
-                raise RuntimeError("Browser research allows at most 4 searches")
+                raise RuntimeError("Browser research allows at most 10 searches")
             if self._budget.pages + pages > MAX_PAGES:
                 raise RuntimeError("Browser research allows at most 12 opened pages")
             if self._budget.actions + actions > MAX_ACTIONS:
-                raise RuntimeError("Browser research allows at most 20 actions")
+                raise RuntimeError(f"Browser research allows at most {MAX_ACTIONS} actions")
             self._budget.searches += searches
             self._budget.pages += pages
             self._budget.actions += actions
@@ -265,13 +267,31 @@ class BrowserGateway:
         return await asyncio.to_thread(validate_public_https_url, url, **kwargs)
 
     async def _run_browser_batch(self, session: str, host: str, commands: list[list[str]]) -> list[Any]:
-        remaining = MAX_ELAPSED_SECONDS - (self._clock() - self._budget.started_at)
-        if remaining <= 0:
-            raise AgentBrowserError("browser research time budget expired")
+        async with self._lock:
+            now = self._clock()
+            active_elapsed = (
+                max(0.0, now - self._budget.active_started_at)
+                if self._budget.active_started_at is not None
+                else 0.0
+            )
+            remaining = MAX_ELAPSED_SECONDS - self._budget.elapsed_seconds - active_elapsed
+            if remaining <= 0:
+                raise AgentBrowserError("browser research time budget expired")
+            if self._budget.active_batches == 0:
+                self._budget.active_started_at = now
+            self._budget.active_batches += 1
         try:
             return await asyncio.wait_for(self.client.run_batch(session, host, commands), timeout=remaining)
         except TimeoutError as error:
             raise AgentBrowserError("browser research time budget expired") from error
+        finally:
+            async with self._lock:
+                self._budget.active_batches -= 1
+                if self._budget.active_batches == 0 and self._budget.active_started_at is not None:
+                    self._budget.elapsed_seconds += max(
+                        0.0, self._clock() - self._budget.active_started_at
+                    )
+                    self._budget.active_started_at = None
 
     def _next_session(self) -> str:
         self._operation += 1

@@ -3,7 +3,7 @@
 import { useMemo, useState } from "react";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import {
-  AlertTriangle, ArrowLeft, ArrowRight, BookOpen, Check, CheckCircle2, Circle,
+  ArrowLeft, ArrowRight, BookOpen, Check, CheckCircle2, Circle,
   ClipboardCheck, ExternalLink, FileSearch, FileText, LoaderCircle, ScrollText,
   Send, Trophy,
 } from "lucide-react";
@@ -79,16 +79,6 @@ export function CoursePlayer({ run, token }: { run: LearningRun; token: string }
 
   return (
     <section aria-labelledby="course-player-title" className="grid gap-5">
-      {run.provider === "mock" && (
-        <div className="flex gap-3 rounded-xl border border-amber-300 bg-amber-50 p-4 text-amber-950 dark:border-amber-800 dark:bg-amber-950 dark:text-amber-100" role="status">
-          <AlertTriangle className="mt-0.5 shrink-0" size={19} aria-hidden="true" />
-          <div>
-            <p className="font-semibold">Demonstration mode does not browse the internet</p>
-            <p className="mt-1 text-sm leading-6">This run proves the workflow only. Switch to a live agent provider before judging research quality or citations.</p>
-          </div>
-        </div>
-      )}
-
       <Card className="overflow-hidden p-0">
         <div className="border-b p-5 sm:p-6">
           <div className="flex flex-wrap items-start justify-between gap-4">
@@ -216,7 +206,7 @@ function EvidenceView({ run }: { run: LearningRun }) {
 
         <section>
           <h4 className="text-lg font-bold">Pages visited</h4>
-          {visits.length ? <ol className="mt-3 grid gap-2">{visits.map((visit, index) => <li key={`${visit.url}-${index}`} className="min-w-0 rounded-lg bg-muted/50 p-3"><div className="flex items-start justify-between gap-2"><a href={safeUrl(visit.url)} target="_blank" rel="noreferrer" className="min-w-0 break-all text-sm font-medium text-primary underline decoration-primary/30 underline-offset-4 hover:decoration-primary">{visit.title ?? visit.url}</a><span className="shrink-0 text-xs font-semibold text-muted-foreground">{visit.status}</span></div>{visit.selected && <p className="mt-1 text-xs font-semibold text-foreground">Used in the final course</p>}</li>)}</ol> : <p className="mt-3 text-sm text-muted-foreground">No browser visits were recorded. This is expected only in demonstration mode.</p>}
+          {visits.length ? <ol className="mt-3 grid gap-2">{visits.map((visit, index) => <li key={`${visit.url}-${index}`} className="min-w-0 rounded-lg bg-muted/50 p-3"><div className="flex items-start justify-between gap-2"><a href={safeUrl(visit.url)} target="_blank" rel="noreferrer" className="min-w-0 break-all text-sm font-medium text-primary underline decoration-primary/30 underline-offset-4 hover:decoration-primary">{visit.title ?? visit.url}</a><span className="shrink-0 text-xs font-semibold text-muted-foreground">{visit.status}</span></div>{visit.selected && <p className="mt-1 text-xs font-semibold text-foreground">Used in the final course</p>}</li>)}</ol> : <p className="mt-3 rounded-xl border border-red-300 bg-red-50 p-4 text-sm text-red-900 dark:border-red-800 dark:bg-red-950 dark:text-red-100">This run has no browser-visit ledger and cannot be independently verified.</p>}
         </section>
       </div>
     </section>
@@ -231,7 +221,56 @@ function TraceView({ runId, token }: { runId: string; token: string }) {
     <section className="pt-6" aria-labelledby="trace-title">
       <h3 id="trace-title" className="text-2xl font-bold">Agent transcript</h3>
       <p className="mt-2 max-w-[70ch] text-muted-foreground">Every durable agent session is shown below, including browser calls and their normalized URLs. Browser page bodies are intentionally not persisted.</p>
-      <div className="mt-6 grid gap-4">{trace.data.sessions.map((session, sessionIndex) => <details key={session.id} open={sessionIndex === 0} className="rounded-xl border bg-card"><summary className="cursor-pointer px-4 py-3 font-semibold marker:text-primary">{session.agent_name} / {session.status}{session.duration_ms !== undefined ? ` / ${formatDuration(session.duration_ms)}` : ""}</summary><div className="border-t p-4"><h4 className="font-semibold">Conversation</h4>{session.transcript.length ? <ol className="mt-3 grid gap-3">{session.transcript.map((entry, index) => <li key={`${entry.created_at}-${index}`} className="min-w-0"><p className="text-xs font-bold text-primary">{entry.role}</p><pre className="mt-1 max-h-80 overflow-auto whitespace-pre-wrap break-words rounded-lg bg-muted p-3 font-sans text-sm leading-6">{entry.content}</pre></li>)}</ol> : <p className="mt-2 text-sm text-muted-foreground">No transcript entries were persisted.</p>}{session.tool_invocations.length ? <><h4 className="mt-6 font-semibold">Tool activity</h4><ol className="mt-3 grid gap-3">{session.tool_invocations.map((tool, index) => <li key={`${tool.created_at}-${index}`} className="rounded-lg bg-muted/60 p-3"><div className="flex flex-wrap justify-between gap-2"><span className="font-medium">{tool.tool_name}</span><span className="text-xs font-semibold text-muted-foreground">{tool.status}{tool.duration_ms !== undefined ? ` / ${formatDuration(tool.duration_ms)}` : ""}</span></div>{tool.metadata?.page_results?.length ? <ul className="mt-2 grid gap-1">{tool.metadata.page_results.map((page) => <li key={page.url} className="flex items-start justify-between gap-2 text-xs"><a href={safeUrl(page.url)} target="_blank" rel="noreferrer" className="min-w-0 break-all text-primary underline">{page.url}</a><span className="shrink-0 font-semibold">{page.status}</span></li>)}</ul> : tool.metadata?.urls?.length ? <ul className="mt-2 grid gap-1">{tool.metadata.urls.map((url) => <li key={url} className="break-all text-xs text-muted-foreground">{url}</li>)}</ul> : null}</li>)}</ol></> : null}</div></details>)}</div>
+      <div className="mt-6 grid gap-4">
+        {trace.data.sessions.map((session, sessionIndex) => (
+          <details key={session.id} open={sessionIndex === 0} className="rounded-xl border bg-card">
+            <summary className="cursor-pointer px-4 py-3 font-semibold marker:text-primary">
+              {session.agent_name} / {session.status}{session.duration_ms !== undefined ? ` / ${formatDuration(session.duration_ms)}` : ""}
+            </summary>
+            <div className="border-t p-4">
+              <h4 className="font-semibold">Conversation</h4>
+              {session.transcript.length ? (
+                <ol className="mt-3 grid gap-3">
+                  {session.transcript.map((entry, index) => (
+                    <li key={`${entry.created_at}-${index}`} className="min-w-0">
+                      <p className="text-xs font-bold text-primary">{entry.role}</p>
+                      <pre className="mt-1 max-h-80 overflow-auto whitespace-pre-wrap break-words rounded-lg bg-muted p-3 font-sans text-sm leading-6">{entry.content}</pre>
+                    </li>
+                  ))}
+                </ol>
+              ) : <p className="mt-2 text-sm text-muted-foreground">No transcript entries were persisted.</p>}
+              {session.tool_invocations.length ? (
+                <>
+                  <h4 className="mt-6 font-semibold">Tool activity</h4>
+                  <ol className="mt-3 grid gap-3">
+                    {session.tool_invocations.map((tool, index) => (
+                      <li key={`${tool.created_at}-${index}`} className="rounded-lg bg-muted/60 p-3">
+                        <div className="flex flex-wrap justify-between gap-2">
+                          <span className="font-medium">{tool.tool_name}</span>
+                          <span className="text-xs font-semibold text-muted-foreground">{tool.status}{tool.duration_ms !== undefined ? ` / ${formatDuration(tool.duration_ms)}` : ""}</span>
+                        </div>
+                        {tool.metadata?.query ? (
+                          <div className="mt-2 rounded-md border bg-card p-2 text-xs">
+                            <p className="font-semibold text-foreground">{tool.metadata.query}</p>
+                            {tool.metadata.purpose ? <p className="mt-1 text-muted-foreground">{tool.metadata.purpose}</p> : null}
+                          </div>
+                        ) : null}
+                        {tool.metadata?.page_results?.length ? (
+                          <ul className="mt-2 grid gap-1">
+                            {tool.metadata.page_results.map((page) => <li key={page.url} className="flex items-start justify-between gap-2 text-xs"><a href={safeUrl(page.url)} target="_blank" rel="noreferrer" className="min-w-0 break-all text-primary underline">{page.url}</a><span className="shrink-0 font-semibold">{page.status}</span></li>)}
+                          </ul>
+                        ) : tool.metadata?.urls?.length ? (
+                          <ul className="mt-2 grid gap-1">{tool.metadata.urls.map((url) => <li key={url} className="break-all text-xs text-muted-foreground">{url}</li>)}</ul>
+                        ) : null}
+                      </li>
+                    ))}
+                  </ol>
+                </>
+              ) : null}
+            </div>
+          </details>
+        ))}
+      </div>
     </section>
   );
 }

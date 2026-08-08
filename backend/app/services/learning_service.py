@@ -1,4 +1,5 @@
 import ipaddress
+import asyncio
 import json
 import re
 from collections import Counter
@@ -10,7 +11,7 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.agents import (
-    ExaminerAgent, PlannerAgent, ResearcherAgent, ResearchSelectorAgent,
+    LessonWriterAgent, PlannerAgent, ResearchQueryPlannerAgent, ResearchSelectorAgent,
     ResearchSynthesisAgent,
 )
 from app.browser.gateway import BrowserGateway
@@ -24,9 +25,10 @@ from app.models.database import (
     LessonProgressRecord, QuizSubmissionRecord, SystemSetting, TranscriptEntryRecord, User,
 )
 from app.schemas.learning import (
-    Assessment, Assignment, AssignmentSubmissionResponse, Course, CurriculumModule,
+    Assessment, AssignmentSubmissionResponse, Course, CurriculumModule,
     LearningGoal, LearningProgressResponse, LearningRun, LearningRunRequest, Lesson,
-    QuizQuestionFeedback, QuizSubmissionResponse, ResearchBrief, Source, SourceVisit,
+    LIVE_AGENT_PROVIDERS, QuizQuestionFeedback, QuizSubmissionResponse, ResearchBrief, Source,
+    SourceVisit,
 )
 
 
@@ -35,8 +37,9 @@ class LearningService:
 
     async def create_run(self, db: AsyncSession, user: User, request: LearningRunRequest) -> LearningRun:
         configured = await db.scalar(select(SystemSetting).where(SystemSetting.key == "agent_provider"))
-        provider = configured.value if configured else get_settings().agent_provider
-        if provider not in {"mock", "codex", "gemini-cli", "antigravity-cli"}:
+        configured_provider = configured.value if configured else get_settings().agent_provider
+        provider = configured_provider if configured_provider in LIVE_AGENT_PROVIDERS else "gemini-cli"
+        if provider not in LIVE_AGENT_PROVIDERS:
             raise ValueError("Unsupported agent provider")
         goal = LearningGoal.model_validate(request)
         learning_request = LearningRequest(user_id=user.id, topic=goal.topic, level=goal.level, hours_per_week=goal.hours_per_week, weeks=goal.weeks)
@@ -46,28 +49,28 @@ class LearningService:
         db.add(run)
         await db.flush()
         harness = AgentHarness(provider, db)
-        researcher, planner, examiner = ResearcherAgent(), PlannerAgent(), ExaminerAgent()
+        planner = PlannerAgent()
         try:
-            if provider == "mock":
-                research_session, _ = await harness.start_and_run(run.id, researcher.name, researcher.build_prompt(goal))
-                planner_session, _ = await harness.start_and_run(run.id, planner.name, planner.build_prompt(goal, {"research": "local deterministic course"}))
-                examiner_session, _ = await harness.start_and_run(run.id, examiner.name, examiner.build_prompt(goal, {"curriculum": "local deterministic course"}))
-                result = self._mock_run(goal, provider, {"Researcher": research_session.id, "Planner": planner_session.id, "Examiner": examiner_session.id})
-            else:
-                research_session, research = await self._research_with_fallback(
-                    db, harness, run.id, provider, goal, researcher
-                )
-                planner_session, planner_output = await harness.start_and_run(run.id, planner.name, planner.build_prompt(goal, research.model_dump()))
-                curriculum = self._provider_curriculum(goal, planner_output, research)
-                # Keep the current deterministic assessment as a compatibility
-                # placeholder. Course content is complete at this point, so do not
-                # spend quota or make success depend on another provider call.
-                assessment = self._build_assessment(goal)
-                result = LearningRun(
-                    id=run.id, provider=provider, research=research, curriculum=curriculum,
-                    course=Course(title=f"{goal.topic} learning path", modules=curriculum), assessment=assessment,
-                    sessions={"Researcher": research_session.id, "Planner": planner_session.id},
-                )
+            research_session, research = await self._browser_research(
+                db, run.id, provider, goal
+            )
+            planner_session, planner_output = await harness.start_and_run(
+                run.id, planner.name, planner.build_prompt(goal, research.model_dump())
+            )
+            planner_output, writer_sessions = await self._expand_short_lessons(
+                harness, run.id, goal, research, planner_output
+            )
+            curriculum = self._provider_curriculum(goal, planner_output, research)
+            assessment = self._provider_assessment(goal, planner_output)
+            result = LearningRun(
+                id=run.id, provider=provider, research=research, curriculum=curriculum,
+                course=Course(title=f"{goal.topic} learning path", modules=curriculum), assessment=assessment,
+                sessions={
+                    "Researcher": research_session.id,
+                    "Planner": planner_session.id,
+                    **writer_sessions,
+                },
+            )
             result.id = run.id
             run.status, run.result, run.completed_at = "completed", result.model_dump(mode="json"), datetime.now(timezone.utc)
             await db.commit()
@@ -77,68 +80,118 @@ class LearningService:
             await db.commit()
             raise
 
-    async def _research_with_fallback(
+    async def _expand_short_lessons(
         self,
-        db: AsyncSession,
         harness: AgentHarness,
         run_id: str,
-        provider: str,
         goal: LearningGoal,
-        researcher: ResearcherAgent,
-    ) -> tuple[AgentSessionRecord, ResearchBrief]:
-        """Use MCP research first and recover only from Gemini terminal errors."""
-        try:
-            session, output = await harness.start_and_run(
-                run_id, researcher.name, researcher.build_prompt(goal)
-            )
-        except RuntimeError as error:
-            if provider != "gemini-cli" or not self._is_fallback_research_error(error):
-                raise
-            return await self._fallback_research(db, run_id, provider, goal)
-        return session, self._verified_research(output)
+        research: ResearchBrief,
+        planner_output: dict,
+    ) -> tuple[dict, dict[str, str]]:
+        """Use live lesson-writer calls when a planner outline is not yet page-length."""
+        expanded_output = json.loads(json.dumps(planner_output))
+        curriculum = expanded_output.get("curriculum")
+        if not isinstance(curriculum, list):
+            return expanded_output, {}
+        for module in curriculum:
+            if not isinstance(module, dict):
+                continue
+            if isinstance(module.get("outcomes"), str):
+                outcome_text = module["outcomes"].strip()
+                outcome_parts = [
+                    part.strip(" .")
+                    for part in re.split(r"\s*(?:,|;|\band\b)\s*", outcome_text)
+                    if len(part.strip(" .")) >= 8
+                ]
+                module["outcomes"] = outcome_parts if len(outcome_parts) >= 2 else [outcome_text]
+            for lesson in module.get("lessons", []):
+                if isinstance(lesson, dict) and lesson.get("id") is not None:
+                    lesson["id"] = str(lesson["id"])
+        writer = LessonWriterAgent()
+        sessions: dict[str, str] = {}
+        verified_sources = [source.model_dump(mode="json") for source in research.sources]
+        for module in curriculum:
+            if not isinstance(module, dict) or not isinstance(module.get("lessons"), list):
+                continue
+            for lesson in module["lessons"]:
+                if not isinstance(lesson, dict):
+                    continue
+                paragraphs = lesson.get("paragraphs")
+                word_count = sum(
+                    len(str(paragraph.get("text") or "").split())
+                    for paragraph in paragraphs or []
+                    if isinstance(paragraph, dict)
+                )
+                if word_count >= 1000:
+                    continue
+                lesson_id = str(lesson.get("id") or "")
+                session, output = await harness.start_and_run(
+                    run_id,
+                    writer.name,
+                    writer.build_prompt(
+                        goal,
+                        {
+                            "module": {
+                                "week": module.get("week"),
+                                "title": module.get("title"),
+                                "outcomes": module.get("outcomes"),
+                            },
+                            "lesson_draft": lesson,
+                            "verified_sources": verified_sources,
+                        },
+                    ),
+                )
+                expanded = output.get("lesson") if isinstance(output, dict) else None
+                if not isinstance(expanded, dict) or str(expanded.get("id")) != lesson_id:
+                    raise ValueError(f"LessonWriter must return the requested lesson id {lesson_id}.")
+                if not isinstance(expanded.get("paragraphs"), list):
+                    raise ValueError(f"LessonWriter must return paragraphs for lesson {lesson_id}.")
+                lesson["paragraphs"] = expanded["paragraphs"]
+                sessions[f"LessonWriter:{lesson_id}"] = session.id
+        return expanded_output, sessions
 
-    @staticmethod
-    def _is_fallback_research_error(error: RuntimeError) -> bool:
-        message = str(error).casefold()
-        if "rate limit exceeded" in message:
-            return False
-        return (
-            "returned a provider error" in message
-            or "must emit the configured json response format" in message
-            or "timed out" in message
-        )
-
-    async def _fallback_research(
+    async def _browser_research(
         self,
         db: AsyncSession,
         run_id: str,
         provider: str,
         goal: LearningGoal,
     ) -> tuple[AgentSessionRecord, ResearchBrief]:
-        """Bounded deep-browser recovery with two plain model decisions."""
+        """Plan broad discovery, browse public pages, then synthesize verified evidence."""
         gateway = self.browser_gateway_factory()
         audit_session = AgentSessionRecord(
             agent_run_id=run_id,
-            agent_name="ResearchFallbackBrowser",
+            agent_name="BrowserResearch",
             provider=provider,
-            input_payload={"agent": "Researcher", "fallback": "direct-browser"},
+            input_payload={"agent": "Researcher", "pipeline": "browser-research"},
         )
         db.add(audit_session)
         await db.flush()
         started = perf_counter()
         try:
+            query_planner = ResearchQueryPlannerAgent()
+            query_session, query_output = await self._plain_research_call(
+                db,
+                run_id,
+                provider,
+                query_planner.name,
+                query_planner.build_prompt(goal),
+            )
+            queries, replacement_queries, seed_candidates = self._validated_query_plan(
+                query_output
+            )
             candidates: list[dict[str, str]] = []
             seen_candidates: set[str] = set()
-            queries = (
-                f"{goal.topic} original research paper foundational definition",
-                f"{goal.topic} official documentation implementation architecture",
-                f"{goal.topic} textbook chapter university lecture slides pdf",
-                f"{goal.topic} high quality technical blog worked example limitations",
-            )
-            for query in queries:
+
+            async def run_search(item: dict[str, str]) -> tuple[dict[str, str], dict, float]:
                 call_started = perf_counter()
-                result = await gateway.browser_search(query, limit=10)
-                await self._audit_fallback_browser_call(
+                result = await gateway.browser_search(item["query"], limit=10)
+                result["purpose"] = item["purpose"]
+                return item, result, call_started
+
+            search_results = await asyncio.gather(*(run_search(item) for item in queries))
+            for _item, result, call_started in search_results:
+                await self._audit_browser_call(
                     db, audit_session.id, "browser_search", result, call_started
                 )
                 for item in result.get("results", []):
@@ -156,19 +209,80 @@ class LearningService:
                         {"title": str(item.get("title") or "Public source")[:300], "url": normalized}
                     )
             if len(candidates) < 12:
+                replacement_results = await asyncio.gather(
+                    *(run_search(item) for item in replacement_queries)
+                )
+                for _item, result, call_started in replacement_results:
+                    await self._audit_browser_call(
+                        db, audit_session.id, "browser_search", result, call_started
+                    )
+                    for item in result.get("results", []):
+                        if not isinstance(item, dict):
+                            continue
+                        normalized = self._normalize_evidence_url(item.get("url"))
+                        if (
+                            normalized is None
+                            or normalized in seen_candidates
+                            or self._is_search_results_url(normalized)
+                        ):
+                            continue
+                        seen_candidates.add(normalized)
+                        candidates.append(
+                            {
+                                "title": str(item.get("title") or "Public source")[:300],
+                                "url": normalized,
+                            }
+                        )
+            for item in seed_candidates:
+                normalized = self._normalize_evidence_url(item["url"])
+                if (
+                    normalized is None
+                    or normalized in seen_candidates
+                    or self._is_search_results_url(normalized)
+                ):
+                    continue
+                seen_candidates.add(normalized)
+                candidate = {"title": item["title"], "url": normalized, "is_canonical_seed": "true"}
+                if kind_hint := item.get("kind_hint") or self._source_kind_hint(item["title"], normalized):
+                    candidate["kind_hint"] = kind_hint
+                candidates.append(candidate)
+            if len(candidates) < 12:
                 raise ValueError(
-                    f"Browser research requires at least 12 public candidates; received {len(candidates)}."
+                    "Research discovery remained too narrow after eight parallel queries and two "
+                    f"replacement queries; received {len(candidates)} unique public candidates."
                 )
 
             selector = ResearchSelectorAgent()
-            selector_session, selector_output = await self._plain_fallback_call(
+            # Search pages can be noisy, especially when DuckDuckGo falls back to
+            # Bing. Always expose the model-planned canonical candidates first,
+            # followed by diverse discovered results. Every chosen URL still has
+            # to be opened and verified by the browser before it can be cited.
+            candidate_by_url = {item["url"]: item for item in candidates}
+            selector_candidates: list[dict[str, str]] = []
+            seed_urls: set[str] = set()
+            for seed in seed_candidates:
+                normalized = self._normalize_evidence_url(seed["url"])
+                candidate = candidate_by_url.get(normalized)
+                if normalized is None or candidate is None:
+                    continue
+                seed_urls.add(normalized)
+                candidate["is_canonical_seed"] = "true"
+                if kind_hint := seed.get("kind_hint") or self._source_kind_hint(seed["title"], normalized):
+                    candidate["kind_hint"] = kind_hint
+                selector_candidates.append(candidate)
+            selector_candidates.extend(
+                item for item in candidates if item["url"] not in seed_urls
+            )
+            selector_session, selector_output = await self._plain_research_call(
                 db,
                 run_id,
                 provider,
                 selector.name,
-                selector.build_prompt(goal, {"candidates": candidates[:32]}),
+                selector.build_prompt(goal, {"candidates": selector_candidates[:40]}),
             )
-            selections = self._validated_fallback_selections(selector_output, candidates)
+            selections = self._validated_research_selections(
+                selector_output, selector_candidates[:40]
+            )
             selected_urls = [item["url"] for item in selections]
             ordered_urls = selected_urls
             kind_hints = {item["url"]: item["kind"] for item in selections}
@@ -176,11 +290,16 @@ class LearningService:
             pages: list[dict[str, object]] = []
             seen_pages: set[str] = set()
             visit_ledger: list[SourceVisit] = []
-            for offset in range(0, len(ordered_urls), 4):
-                batch = ordered_urls[offset : offset + 4]
+
+            async def run_read(batch: list[str]) -> tuple[dict, float]:
                 call_started = perf_counter()
                 result = await gateway.browser_read(batch)
-                await self._audit_fallback_browser_call(
+                return result, call_started
+
+            batches = [ordered_urls[offset : offset + 4] for offset in range(0, len(ordered_urls), 4)]
+            read_results = await asyncio.gather(*(run_read(batch) for batch in batches))
+            for result, call_started in read_results:
+                await self._audit_browser_call(
                     db, audit_session.id, "browser_read", result, call_started
                 )
                 for page in result.get("pages", []):
@@ -209,17 +328,36 @@ class LearningService:
                     )
             if len(pages) < 8:
                 raise ValueError(
-                    f"Browser fallback requires 8 readable public sources; received {len(pages)}."
+                    f"Browser research requires 8 readable public sources; received {len(pages)}."
                 )
 
             synthesis = ResearchSynthesisAgent()
-            synthesis_session, synthesis_output = await self._plain_fallback_call(
-                db,
-                run_id,
-                provider,
-                synthesis.name,
-                synthesis.build_prompt(goal, {"pages": pages}),
-            )
+            synthesis_sessions: list[AgentSessionRecord] = []
+            synthesized_sources: list[dict] = []
+            for index, page_batch in enumerate(
+                (pages[offset : offset + 6] for offset in range(0, len(pages), 6)),
+                start=1,
+            ):
+                part_session, part_output = await self._plain_research_call(
+                    db,
+                    run_id,
+                    provider,
+                    f"ResearchSynthesisPart{index}",
+                    synthesis.build_prompt(goal, {"pages": page_batch}),
+                )
+                synthesis_sessions.append(part_session)
+                synthesized_sources.extend(
+                    source for source in part_output.get("sources", [])
+                    if isinstance(source, dict)
+                )
+            synthesis_session = synthesis_sessions[0]
+            synthesis_output = {"topic": goal.topic, "sources": synthesized_sources}
+            for source in synthesis_output.get("sources", []):
+                if not isinstance(source, dict):
+                    continue
+                normalized = self._normalize_evidence_url(source.get("url"))
+                if normalized in kind_hints:
+                    source["kind"] = kind_hints[normalized]
             from app.harness import AgentResult
 
             research = self._verified_research(
@@ -239,27 +377,28 @@ class LearningService:
                 "candidate_count": len(candidates),
                 "selected_count": len(selections),
                 "read_count": len(pages),
+                "query_planner_session_id": query_session.id,
                 "selector_session_id": selector_session.id,
-                "synthesis_session_id": synthesis_session.id,
+                "synthesis_session_ids": [session.id for session in synthesis_sessions],
             }
             self._add_transcript_entry(
                 db,
                 audit_session.id,
                 "system",
-                f"Completed four focused searches, selected 12 candidates, and read {len(pages)} public pages. Page bodies are not persisted.",
+                f"Completed {len(queries)} parallel research queries, selected 12 candidates, and read {len(pages)} public pages. Page bodies are not persisted.",
                 1,
             )
             return synthesis_session, research
         except Exception:
             audit_session.status = "failed"
-            audit_session.error_message = "Direct browser research fallback failed."
+            audit_session.error_message = "Browser research pipeline failed."
             raise
         finally:
             audit_session.completed_at = datetime.now(timezone.utc)
             audit_session.duration_ms = int((perf_counter() - started) * 1000)
             await db.flush()
 
-    async def _plain_fallback_call(
+    async def _plain_research_call(
         self,
         db: AsyncSession,
         run_id: str,
@@ -272,22 +411,31 @@ class LearningService:
             agent_run_id=run_id,
             agent_name=role,
             provider=provider,
-            input_payload={"agent": role, "fallback": True},
+            input_payload={"agent": role, "pipeline": "browser-research"},
         )
         db.add(session)
         await db.flush()
         started = perf_counter()
         try:
-            redacted_input = (
-                "Selected public source candidates from normalized URLs."
-                if role == "ResearchSelector"
-                else "Synthesized browser-read evidence. Page bodies were supplied in memory and are intentionally omitted from the durable transcript."
-            )
+            redacted_inputs = {
+                "ResearchQueryPlanner": (
+                    "Planned eight complementary research queries, two bounded replacements, "
+                    "and browser-verifiable canonical seed URLs."
+                ),
+                "ResearchSelector": "Selected public source candidates from normalized URLs.",
+            }
+            redacted_input = redacted_inputs.get(role)
+            if redacted_input is None and role.startswith("ResearchSynthesisPart"):
+                redacted_input = (
+                    "Synthesized one bounded batch of browser-read evidence. Page bodies were supplied "
+                    "in memory and are intentionally omitted from the durable transcript."
+                )
+            redacted_input = redacted_input or "Processed bounded research evidence."
             self._add_transcript_entry(db, session.id, "user", redacted_input, 1)
             execution = await get_runtime(provider, role).execute(prompt)
             payload = execution.payload if hasattr(execution, "payload") else execution
             if not isinstance(payload, dict):
-                raise ValueError(f"{role} must return a JSON object.")
+                raise ValueError(f"{role} must return a JSON object.")  # noqa: TRY004
             session.output_payload = payload
             session.status = "completed"
             self._add_transcript_entry(db, session.id, "assistant", json.dumps(payload), 2)
@@ -302,7 +450,76 @@ class LearningService:
             await db.flush()
 
     @classmethod
-    def _validated_fallback_selections(
+    def _validated_query_plan(
+        cls,
+        output: dict,
+    ) -> tuple[list[dict[str, str]], list[dict[str, str]], list[dict[str, str]]]:
+        if not isinstance(output, dict):
+            raise ValueError("ResearchQueryPlanner must return a JSON object.")  # noqa: TRY004
+
+        def validate_queries(key: str, expected: int) -> list[dict[str, str]]:
+            items = output.get(key)
+            if not isinstance(items, list) or len(items) != expected:
+                raise ValueError(
+                    f"ResearchQueryPlanner must return exactly {expected} {key}."
+                )
+            validated: list[dict[str, str]] = []
+            seen: set[str] = set()
+            for item in items:
+                if not isinstance(item, dict):
+                    raise ValueError("ResearchQueryPlanner returned an invalid query item.")  # noqa: TRY004
+                query = " ".join(str(item.get("query") or "").split())
+                purpose = " ".join(str(item.get("purpose") or "").split())
+                normalized = query.casefold()
+                if (
+                    not 8 <= len(query) <= 300
+                    or not 8 <= len(purpose) <= 300
+                    or normalized in seen
+                ):
+                    raise ValueError("ResearchQueryPlanner queries must be unique and specific.")
+                seen.add(normalized)
+                validated.append({"query": query, "purpose": purpose})
+            return validated
+
+        queries = validate_queries("queries", 8)
+        replacement_queries = validate_queries("replacement_queries", 2)
+        all_queries = {item["query"].casefold() for item in queries}
+        if any(item["query"].casefold() in all_queries for item in replacement_queries):
+            raise ValueError("ResearchQueryPlanner replacement queries must be distinct.")
+
+        raw_seeds = output.get("seed_candidates")
+        if not isinstance(raw_seeds, list) or not 8 <= len(raw_seeds) <= 12:
+            raise ValueError("ResearchQueryPlanner must propose 8-12 canonical seed candidates.")
+        seeds: list[dict[str, str]] = []
+        seen_urls: set[str] = set()
+        for item in raw_seeds:
+            if not isinstance(item, dict):
+                continue
+            normalized = cls._normalize_evidence_url(item.get("url"))
+            title = " ".join(str(item.get("title") or "Public source").split())[:300]
+            purpose = " ".join(str(item.get("purpose") or "Candidate evidence").split())[:500]
+            if (
+                normalized is None
+                or normalized in seen_urls
+                or cls._is_search_results_url(normalized)
+                or len(purpose) < 8
+            ):
+                continue
+            seen_urls.add(normalized)
+            declared_kind = item.get("kind")
+            kind_hint = declared_kind if declared_kind in {
+                "documentation", "paper", "book", "lecture", "slides", "article", "repository"
+            } else cls._source_kind_hint(title, normalized)
+            seed = {"title": title, "url": normalized, "purpose": purpose}
+            if kind_hint:
+                seed["kind_hint"] = kind_hint
+            seeds.append(seed)
+        if len(seeds) < 8:
+            raise ValueError("ResearchQueryPlanner must provide at least 8 valid HTTPS seed URLs.")
+        return queries, replacement_queries, seeds
+
+    @classmethod
+    def _validated_research_selections(
         cls,
         output: dict,
         candidates: list[dict[str, str]],
@@ -310,28 +527,94 @@ class LearningService:
         selections = output.get("selections") if isinstance(output, dict) else None
         if not isinstance(selections, list) or len(selections) != 12:
             raise ValueError("ResearchSelector must choose exactly 12 candidates.")
-        allowed_urls = {item["url"] for item in candidates}
+        candidate_by_url = {item["url"]: item for item in candidates}
+        allowed_urls = set(candidate_by_url)
         allowed_kinds = {"documentation", "paper", "book", "lecture", "slides", "article", "repository"}
         validated: list[dict[str, str]] = []
         seen: set[str] = set()
         for item in selections:
             if not isinstance(item, dict):
-                raise ValueError("ResearchSelector returned an invalid selection.")
+                continue
             normalized = cls._normalize_evidence_url(item.get("url") or item.get("requested_url"))
-            kind = item.get("kind")
+            kind = candidate_by_url.get(normalized, {}).get("kind_hint") or item.get("kind")
             if normalized not in allowed_urls or normalized in seen or kind not in allowed_kinds:
-                raise ValueError("ResearchSelector must use unique candidate URLs and supported kinds.")
+                continue
             seen.add(normalized)
             validated.append({"url": normalized, "kind": kind})
-        kinds = {item["kind"] for item in validated}
-        required = {"documentation", "paper", "book", "article", "repository"}
-        if missing := required - kinds:
-            raise ValueError(
-                "ResearchSelector source mix is incomplete; missing: " + ", ".join(sorted(missing))
+        for candidate in candidates:
+            if len(validated) == 12:
+                break
+            normalized = candidate["url"]
+            if normalized in seen:
+                continue
+            kind = candidate.get("kind_hint") or cls._source_kind_hint(
+                candidate.get("title", ""), normalized
+            ) or "article"
+            seen.add(normalized)
+            validated.append({"url": normalized, "kind": kind})
+        if len(validated) != 12:
+            raise ValueError("ResearchSelector did not yield 12 unique valid candidates.")
+        return cls._ensure_source_mix(validated, candidates)
+
+    @classmethod
+    def _ensure_source_mix(
+        cls,
+        selections: list[dict[str, str]],
+        candidates: list[dict[str, str]],
+    ) -> list[dict[str, str]]:
+        """Repair only source-type omissions using canonical typed candidates."""
+        repaired = list(selections)
+        selected_urls = {item["url"] for item in repaired}
+        requirements = [
+            {"paper", "book"}, {"documentation", "repository"}, {"article"},
+        ]
+        for required in requirements:
+            if any(item["kind"] in required for item in repaired):
+                continue
+            replacement = next(
+                (
+                    {"url": item["url"], "kind": item["kind_hint"]}
+                    for item in candidates
+                    if item.get("kind_hint") in required and item["url"] not in selected_urls
+                ),
+                None,
             )
-        if not kinds.intersection({"lecture", "slides"}):
-            raise ValueError("ResearchSelector source mix must include a lecture or slide deck.")
-        return validated
+            if replacement is None:
+                label = " or ".join(sorted(required))
+                raise ValueError(f"ResearchSelector source mix is incomplete; missing: {label}")
+            counts = Counter(item["kind"] for item in repaired)
+            replace_at = next(
+                (
+                    index for index in range(len(repaired) - 1, -1, -1)
+                    if counts[repaired[index]["kind"]] > 1
+                ),
+                None,
+            )
+            if replace_at is None:
+                raise ValueError("ResearchSelector source mix could not be balanced.")
+            selected_urls.remove(repaired[replace_at]["url"])
+            repaired[replace_at] = replacement
+            selected_urls.add(replacement["url"])
+        return repaired
+
+    @staticmethod
+    def _source_kind_hint(title: str, url: str) -> str | None:
+        """Infer only high-confidence source types; leave ambiguous pages to Gemini."""
+        text = f"{title} {url}".casefold()
+        host = urlsplit(url).hostname or ""
+        if host == "arxiv.org" or "doi.org/" in text or " paper" in text:
+            return "paper"
+        if host == "github.com" or " repository" in text:
+            return "repository"
+        if "documentation" in text or "/docs/" in text or "readthedocs" in host:
+            return "documentation"
+        if any(marker in text for marker in ("book", "chapter", "textbook")):
+            return "book"
+        if "slides" in text or "slide deck" in text:
+            return "slides"
+        if "lecture" in text:
+            return "lecture"
+        return None
 
     @staticmethod
     def _add_transcript_entry(
@@ -351,7 +634,7 @@ class LearningService:
         )
 
     @classmethod
-    async def _audit_fallback_browser_call(
+    async def _audit_browser_call(
         cls,
         db: AsyncSession,
         session_id: str,
@@ -390,12 +673,14 @@ class LearningService:
             tool_name,
             status,
             {
+                "query": str(result.get("query") or "")[:500] if tool_name == "browser_search" else None,
+                "purpose": str(result.get("purpose") or "")[:500] if tool_name == "browser_search" else None,
                 "urls": urls[:20],
                 "domains": domains[:20],
                 "result_count": len(items),
                 "success_count": success_count,
                 "page_results": page_results,
-                "fallback": True,
+                "pipeline": "browser-research",
             },
             str(error_payload.get("code") or "Browser operation unavailable") if status == "failed" else None,
             started_at=started_at,
@@ -434,15 +719,17 @@ class LearningService:
                 f"received {len(verified)}. Run browser_read on every source before citing it."
             )
         kinds = {source.kind for source in verified}
-        required_kinds = {"documentation", "paper", "book", "article", "repository"}
-        missing_kinds = required_kinds - kinds
-        if missing_kinds:
+        source_groups = [
+            ({"paper", "book"}, "a paper or book"),
+            ({"documentation", "repository"}, "documentation or a repository"),
+            ({"article"}, "an explanatory article"),
+        ]
+        missing_groups = [label for group, label in source_groups if not kinds.intersection(group)]
+        if missing_groups:
             raise ValueError(
-                "Research must cover documentation, paper, book, article, and repository sources; "
-                f"missing: {', '.join(sorted(missing_kinds))}."
+                "Research must include primary, practical, and explanatory evidence; "
+                f"missing: {', '.join(missing_groups)}."
             )
-        if not kinds.intersection({"lecture", "slides"}):
-            raise ValueError("Research must include a browser-verified lecture or slide deck.")
         selected = {source.url for source in verified}
         discovered: list[str] = []
         unavailable: list[str] = []
@@ -487,7 +774,7 @@ class LearningService:
         """Validate complete provider-authored lessons and their evidence links."""
         payload = planner_output.get("curriculum") if isinstance(planner_output, dict) else None
         if not isinstance(payload, list):
-            raise ValueError("Planner must return a curriculum array.")
+            raise ValueError("Planner must return a curriculum array.")  # noqa: TRY004
         try:
             modules = [CurriculumModule.model_validate(item) for item in payload]
         except (TypeError, ValueError) as error:
@@ -568,6 +855,71 @@ class LearningService:
         return grounded
 
     @staticmethod
+    def _provider_assessment(goal: LearningGoal, planner_output: dict) -> Assessment:
+        """Validate provider-authored quizzes and practical work without synthetic padding."""
+        payload = planner_output.get("assessment") if isinstance(planner_output, dict) else None
+        if not isinstance(payload, dict):
+            raise ValueError("Planner must return an assessment object.")  # noqa: TRY004
+        payload = json.loads(json.dumps(payload))
+        assignment = payload.get("assignment")
+        if isinstance(assignment, dict) and isinstance(assignment.get("rubric"), dict):
+            assignment["rubric"] = [
+                f"{label}: {criterion}" for label, criterion in assignment["rubric"].items()
+            ]
+        if isinstance(payload.get("project"), dict):
+            project = payload["project"]
+            payload["project"] = ". ".join(
+                str(value).strip().rstrip(".")
+                for value in project.values()
+                if isinstance(value, str) and value.strip()
+            ) + "."
+        try:
+            assessment = Assessment.model_validate(payload)
+        except (TypeError, ValueError) as error:
+            raise ValueError("Planner returned an invalid assessment structure.") from error
+
+        questions = assessment.quiz_items or assessment.quiz
+        minimum_questions = goal.weeks * 2
+        maximum_questions = goal.weeks * 5
+        if not minimum_questions <= len(questions) <= maximum_questions:
+            raise ValueError(
+                f"Planner must return 2-5 quiz questions per week ({minimum_questions}-{maximum_questions} total)."
+            )
+
+        expected_weeks = set(range(1, goal.weeks + 1))
+        questions_per_week = Counter(question.module_week for question in questions)
+        if set(questions_per_week) != expected_weeks or any(
+            not 2 <= questions_per_week[week] <= 5 for week in expected_weeks
+        ):
+            raise ValueError("Planner must return 2-5 quiz questions for every requested week.")
+
+        seen_ids: set[str] = set()
+        for question in questions:
+            choices = [choice.strip() for choice in question.choices]
+            if not question.id.strip() or question.id in seen_ids:
+                raise ValueError("Planner quiz question ids must be non-empty and unique.")
+            seen_ids.add(question.id)
+            if len(question.prompt.strip()) < 20:
+                raise ValueError(f"Planner quiz question {question.id} needs a complete prompt.")
+            if len(set(choices)) != len(choices) or any(len(choice) < 2 for choice in choices):
+                raise ValueError(f"Planner quiz question {question.id} needs distinct, complete choices.")
+            if question.correct_answer not in question.choices:
+                raise ValueError(
+                    f"Planner quiz question {question.id} must include correct_answer in choices."
+                )
+            if not question.explanation or len(question.explanation.strip()) < 20:
+                raise ValueError(
+                    f"Planner quiz question {question.id} needs a substantive answer explanation."
+                )
+
+        if any(len(item.strip()) < 10 for item in assessment.assignment.deliverables):
+            raise ValueError("Planner assignment deliverables must be concrete.")
+        if any(len(item.strip()) < 10 for item in assessment.assignment.rubric):
+            raise ValueError("Planner assignment rubric criteria must be observable.")
+
+        return assessment.model_copy(update={"quiz": questions, "quiz_items": questions})
+
+    @staticmethod
     def _validate_module_content(module: CurriculumModule, goal: LearningGoal) -> None:
         if len(module.title.strip()) < 3 or len(module.overview.strip()) < 40:
             raise ValueError(f"Planner module week {module.week} needs a complete title and overview.")
@@ -614,9 +966,9 @@ class LearningService:
             )
         texts = [paragraph.text.strip() for paragraph in lesson.paragraphs]
         word_count = sum(len(text.split()) for text in texts)
-        if not 1200 <= word_count <= 1800:
+        if not 1000 <= word_count <= 1800:
             raise ValueError(
-                f"Planner lesson {lesson.id or '<unknown>'} in week {week} must contain 1200-1800 substantive words."
+                f"Planner lesson {lesson.id or '<unknown>'} in week {week} must contain 1000-1800 substantive words."
             )
         normalized = [re.sub(r"\s+", " ", text.casefold()) for text in texts]
         if len(set(normalized)) != len(normalized):
@@ -687,111 +1039,6 @@ class LearningService:
             return True
         return hostname in {"google.com", "www.google.com"} and parsed.path.casefold().startswith("/search")
 
-    def _mock_run(self, goal: LearningGoal, provider: str, sessions: dict[str, str]) -> LearningRun:
-        curriculum = self._enrich_curriculum(goal, [
-            CurriculumModule(
-                week=week,
-                title=self._module_title(goal.topic, week),
-                outcomes=self._outcomes(goal.topic, goal.level, week),
-                source_urls=[],
-            )
-            for week in range(1, goal.weeks + 1)
-        ])
-        assessment = self._build_assessment(goal)
-        return LearningRun(
-            id="", provider=provider, research=ResearchBrief(topic=goal.topic, sources=[]),
-            curriculum=curriculum, course=Course(title=f"{goal.topic} learning path", modules=curriculum),
-            assessment=assessment, sessions=sessions,
-        )
-
-    @staticmethod
-    def _module_title(topic: str, week: int) -> str:
-        phases = ["Foundations and vocabulary", "Core workflow", "Guided practice", "Integration and reflection"]
-        return f"{topic}: {phases[min(week - 1, len(phases) - 1)]}"
-
-    @staticmethod
-    def _outcomes(topic: str, level: str, week: int) -> list[str]:
-        if week == 1:
-            return [f"Explain the essential vocabulary of {topic}", f"Set up a repeatable {topic} study and practice environment"]
-        if week == 2:
-            return [f"Apply a core {topic} workflow to a small example", "Check work against documentation and expected outcomes"]
-        return [f"Complete and explain a {level}-level {topic} practice task", "Identify one improvement after reviewing evidence from the task"]
-
-    def _enrich_curriculum(self, goal: LearningGoal, curriculum: list[CurriculumModule]) -> list[CurriculumModule]:
-        """Make every generated outline usable in the study player, including CLI-agent output."""
-        enriched: list[CurriculumModule] = []
-        for module in curriculum:
-            week = module.week
-            lessons = module.lessons or [
-                Lesson(
-                    id=f"week-{week}-learn",
-                    title=f"Learn: {module.title}",
-                    objective=module.outcomes[0] if module.outcomes else f"Build a working mental model of {goal.topic}",
-                    content=(
-                        f"### Focus\nThis lesson turns **{goal.topic}** into a concrete workflow. Read one primary source, "
-                        "write down unfamiliar terms, and connect each term to an example.\n\n"
-                        "### Study loop\n1. Read a short reference section.\n2. Reproduce its smallest example.\n"
-                        "3. Change one input and record what changed.\n4. Explain the result in your own words.\n\n"
-                        "### Checkpoint\nYou should be able to state the problem this technique solves, its inputs, and how to verify its output."
-                    ),
-                    practice=f"Create a one-page {goal.topic} note with three terms, one tiny example, and one question to investigate.",
-                    estimated_minutes=max(20, min(90, goal.hours_per_week * 12)),
-                    source_urls=module.source_urls,
-                ),
-                Lesson(
-                    id=f"week-{week}-apply",
-                    title=f"Apply: {module.title}",
-                    objective=module.outcomes[-1] if module.outcomes else f"Practise {goal.topic} with evidence",
-                    content=(
-                        f"### Deliberate practice\nChoose one small, observable use of **{goal.topic}**. Work in short iterations: "
-                        "predict the result, try it, compare the result with your prediction, and capture the evidence.\n\n"
-                        "### Reflection\nDescribe one mistake or surprise. Then revise the example once, explaining why the revision is stronger."
-                    ),
-                    practice=f"Complete a 30-minute {goal.topic} exercise and save the starting point, final result, and a short reflection.",
-                    estimated_minutes=max(20, min(90, goal.hours_per_week * 12)),
-                    source_urls=module.source_urls,
-                ),
-            ]
-            enriched.append(module.model_copy(update={
-                "overview": module.overview or f"Week {week} combines focused study and hands-on {goal.topic} practice.",
-                "estimated_hours": module.estimated_hours or max(1, goal.hours_per_week),
-                "lessons": lessons,
-            }))
-        return enriched
-
-    def _build_assessment(self, goal: LearningGoal) -> Assessment:
-        questions = []
-        for week in range(1, goal.weeks + 1):
-            questions.extend([
-                {
-                    "id": f"week-{week}-q1", "module_week": week,
-                    "prompt": f"When beginning a new {goal.topic} task, what is the most reliable first step?",
-                    "choices": ["Define the goal, key terms, and a small observable example", "Start with the largest possible project", "Memorize every reference page", "Skip validation until the end"],
-                    "correct_answer": "Define the goal, key terms, and a small observable example",
-                    "explanation": "A small observable example creates a feedback loop and makes the topic manageable.",
-                },
-                {
-                    "id": f"week-{week}-q2", "module_week": week,
-                    "prompt": f"How should you check a {goal.topic} practice result?",
-                    "choices": ["Compare it with a documented expectation and explain any difference", "Assume it is right if it looks plausible", "Only ask someone else to verify it", "Change several variables at once"],
-                    "correct_answer": "Compare it with a documented expectation and explain any difference",
-                    "explanation": "Comparing one result to a known expectation turns practice into evidence-based learning.",
-                },
-            ])
-        quiz_items = [self._quiz_item(item) for item in questions]
-        assignment = Assignment(
-            title=f"{goal.topic} evidence notebook",
-            prompt=f"Build a small {goal.topic} example that demonstrates one course outcome. Include your initial prediction, the steps you followed, evidence of the result, and a reflection.",
-            deliverables=["A reproducible example or walkthrough", "A short explanation of the concepts used", "Evidence of the result", "A reflection describing one revision"],
-            rubric=["The example has a clear goal and scope", "Concepts are explained accurately", "Evidence supports the claimed result", "Reflection identifies a useful next step"],
-        )
-        return Assessment(quiz=quiz_items, quiz_items=quiz_items, assignment=assignment, project=f"Complete a portfolio-ready {goal.topic} project by week {goal.weeks}, documenting decisions and validation evidence.")
-
-    @staticmethod
-    def _quiz_item(payload: dict):
-        from app.schemas.learning import QuizItem
-        return QuizItem(**payload)
-
     async def owned_run(self, db: AsyncSession, user: User, run_id: str) -> AgentRun | None:
         return await db.scalar(select(AgentRun).join(LearningRequest).where(AgentRun.id == run_id, LearningRequest.user_id == user.id))
 
@@ -815,7 +1062,7 @@ class LearningService:
         by_id = {question.id: question for question in questions}
         supplied = dict(answers)
         if unknown := set(supplied) - set(by_id):
-            raise ValueError(f"Unknown quiz question: {sorted(unknown)[0]}")
+            raise ValueError(f"Unknown quiz question: {min(unknown)}")
         feedback = [
             QuizQuestionFeedback(
                 question_id=question.id, selected_answer=supplied.get(question.id),

@@ -5,13 +5,13 @@ import { ActivityIndicator, Pressable, SafeAreaView, ScrollView, StyleSheet, Tex
 import { BarChart } from "@/components/BarChart";
 import { getAgentProvider, getOverview, getSessions, getUsers, setAgentProvider, AgentProvider, AnalyticsOverview, Session, User } from "@/lib/api";
 
-const providers: AgentProvider[] = ["mock", "codex", "gemini-cli", "antigravity-cli"];
+const providers: AgentProvider[] = ["gemini-cli", "codex", "antigravity-cli"];
 
 export default function AdminScreen() {
   const [overview, setOverview] = useState<AnalyticsOverview | null>(null);
   const [users, setUsers] = useState<User[]>([]);
   const [sessions, setSessions] = useState<Session[]>([]);
-  const [provider, setProvider] = useState<AgentProvider>("mock");
+  const [provider, setProvider] = useState<AgentProvider>("gemini-cli");
   const [query, setQuery] = useState("");
   const [error, setError] = useState("");
 

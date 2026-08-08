@@ -6,12 +6,14 @@ export type SourceVisit = { url: string; title?: string; status: "discovered" | 
 export type LessonParagraph = { text: string; source_urls: string[] };
 export type CourseLesson = { id: string; title: string; objective: string; content?: string; paragraphs?: LessonParagraph[]; practice: string; estimated_minutes: number; source_urls: string[] };
 export type CourseModule = { week: number; title: string; outcomes: string[]; source_urls?: string[]; overview?: string; estimated_hours?: number; lessons?: CourseLesson[] };
-export type LearningRun = { id: string; provider: "mock" | "codex" | "gemini-cli" | "antigravity-cli"; research: { topic: string; sources: Source[]; visited_sources?: SourceVisit[] }; curriculum: CourseModule[]; assessment: { quiz: string[]; assignment: string; project: string }; sessions: Record<string, string> };
+export type QuizItem = { id: string; module_week: number; prompt: string; choices: string[] };
+export type AssignmentPrompt = { title: string; prompt: string; deliverables: string[]; rubric: string[] };
+export type LearningRun = { id: string; provider: "codex" | "gemini-cli" | "antigravity-cli"; research: { topic: string; sources: Source[]; visited_sources?: SourceVisit[] }; curriculum: CourseModule[]; assessment: { quiz: QuizItem[]; quiz_items?: QuizItem[]; assignment: AssignmentPrompt; project: string }; sessions: Record<string, string> };
 export type AnalyticsOverview = { total_users: number; total_requests: number; completed_runs: number; failed_runs: number; active_sessions: number; transcript_entries: number; average_session_duration_ms: number };
 export type Session = { id: string; agent_name: string; provider: string; status: string; learning_request_id: string; topic: string; duration_ms: number | null; started_at: string };
 export type TranscriptSession = { id: string; run_id: string; agent_name: string; provider: string; status: string; transcript: Array<{ role: string; content: string; created_at: string }> };
-export type LearningRunTrace = { run_id: string; sessions: Array<{ id: string; agent_name: string; provider: string; status: string; duration_ms?: number; transcript: Array<{ role: string; content: string; created_at: string }>; tool_invocations: Array<{ tool_name: string; status: string; duration_ms?: number; metadata?: { urls?: string[]; page_results?: Array<{ url: string; status: string }> }; created_at: string }> }> };
-export type AgentProvider = "mock" | "codex" | "gemini-cli" | "antigravity-cli";
+export type LearningRunTrace = { run_id: string; sessions: Array<{ id: string; agent_name: string; provider: string; status: string; duration_ms?: number; transcript: Array<{ role: string; content: string; created_at: string }>; tool_invocations: Array<{ tool_name: string; status: string; duration_ms?: number; metadata?: { query?: string; purpose?: string; urls?: string[]; page_results?: Array<{ url: string; status: string }> }; created_at: string }> }> };
+export type AgentProvider = "codex" | "gemini-cli" | "antigravity-cli";
 
 const API_URL = process.env.EXPO_PUBLIC_API_URL ?? "http://127.0.0.1:8000";
 

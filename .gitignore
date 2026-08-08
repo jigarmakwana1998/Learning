@@ -8,5 +8,8 @@ backend/evaluation-report.json
 backend/benchmark.json
 __pycache__/
 .pytest_cache/
+backend/.pytest-*/
+backend/.test-*/
+learning_live_smoke.db
 node_modules/
 .local-*.log

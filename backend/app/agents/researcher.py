@@ -3,7 +3,7 @@ from .base import LearningAgent
 
 class ResearcherAgent(LearningAgent):
     name = "Researcher"
-    tools = ["browser_search", "browser_read"]
+    tools = ("browser_search", "browser_read")
 
     def instruction(self) -> str:
         return (
@@ -19,9 +19,12 @@ class ResearcherAgent(LearningAgent):
             "original papers and canonical publishers. The final set must include at least one documentation, paper, book, "
             "lecture or slides, and article source. Give 2-5 concrete key_points for every source, capturing claims, definitions, "
             "mechanisms, examples, limitations, or architecture details that can be taught. Explain what concrete curriculum need "
-            "each source supports rather than using generic quality claims. Work in a bounded sequence: make four focused "
-            "browser_search calls covering foundations/primary work, official implementation, courses/books/slides, and current "
-            "explanations/practice. Inspect exactly twelve candidates in three browser_read batches of four URLs, then filter. "
+            "each source supports rather than using generic quality claims. Plan eight complementary discovery angles before "
+            "searching: the broader concept, the focal mechanism, their relationship, foundational work, importance/use cases, "
+            "placement in current architecture, implementation/examples, and limitations/alternatives. Run eight focused "
+            "browser_search calls, using up to two distinct replacement searches only when coverage remains weak. Do not prefix "
+            "every query with the same topic phrase; use distinctive concepts, authors, libraries, institutions, or limitations "
+            "as lead terms. Inspect exactly twelve candidates in three browser_read batches of four URLs, then filter. "
             "Never cite a search-results URL or a URL seen only in browser_search. "
             "Never invent, shorten, guess, or alter a source URL."
         )

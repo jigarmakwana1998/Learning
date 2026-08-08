@@ -12,7 +12,7 @@ class Settings(BaseModel):
     app_name: str = os.getenv("APP_NAME", "Learning Coach API")
     app_version: str = os.getenv("APP_VERSION", "0.4.0")
     environment: str = os.getenv("ENVIRONMENT", "development")
-    agent_provider: str = os.getenv("AGENT_PROVIDER", "mock")
+    agent_provider: str = os.getenv("AGENT_PROVIDER", "gemini-cli")
     database_url: str = os.getenv("DATABASE_URL", "sqlite+aiosqlite:///./learning_coach.db")
     jwt_secret: str = os.getenv("JWT_SECRET", "change-this-development-jwt-secret")
     encryption_key: str = os.getenv("APP_ENCRYPTION_KEY", "q0_mL9PZ2Ik1Wl9qVzYmIDQDfL8dbbSbix-AJZAcBLk=")

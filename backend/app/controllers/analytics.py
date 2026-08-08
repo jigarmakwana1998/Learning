@@ -5,9 +5,10 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import get_db
 from app.core.dependencies import get_admin
+from app.core.config import get_settings
 from app.models.database import AgentRun, AgentSessionRecord, LearningRequest, SystemSetting, TranscriptEntryRecord, User
 from app.schemas.analytics import AnalyticsOverview, RequestListItem, SessionListItem
-from app.schemas.learning import AgentProviderSetting
+from app.schemas.learning import AgentProviderSetting, LIVE_AGENT_PROVIDERS
 
 router = APIRouter(prefix="/analytics", tags=["analytics"])
 
@@ -15,7 +16,9 @@ router = APIRouter(prefix="/analytics", tags=["analytics"])
 @router.get("/settings/agent-provider", response_model=AgentProviderSetting)
 async def get_agent_provider(db: AsyncSession = Depends(get_db), _: User = Depends(get_admin)) -> AgentProviderSetting:
     setting = await db.scalar(select(SystemSetting).where(SystemSetting.key == "agent_provider"))
-    return AgentProviderSetting(provider=setting.value if setting else "mock")
+    configured = setting.value if setting and setting.value in LIVE_AGENT_PROVIDERS else get_settings().agent_provider
+    provider = configured if configured in LIVE_AGENT_PROVIDERS else "gemini-cli"
+    return AgentProviderSetting(provider=provider)
 
 
 @router.put("/settings/agent-provider", response_model=AgentProviderSetting)

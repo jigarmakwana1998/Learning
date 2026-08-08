@@ -18,7 +18,7 @@ async def main():
         try:
             output = await runtime.execute(json.dumps({"role": "Researcher", "learner_goal": fixture, "return": "JSON sources"}))
             results.append({"fixture": fixture["name"], "success": True, "schema_valid": isinstance(output, dict), "duration_ms": round((perf_counter() - started) * 1000), "source_count": len(output.get("sources", []))})
-        except Exception as error:
+        except (OSError, RuntimeError, ValueError) as error:
             results.append({"fixture": fixture["name"], "success": False, "duration_ms": round((perf_counter() - started) * 1000), "failure": str(error)})
     report = Path("evaluation-report.json"); report.write_text(json.dumps(results, indent=2)); print(report)
 

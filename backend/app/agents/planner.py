@@ -5,13 +5,13 @@ class PlannerAgent(LearningAgent):
     name = "Planner"
     # Planning is grounded entirely in the verified brief embedded in its input.
     # Do not advertise logical placeholder tools that the runtime cannot execute.
-    tools = []
+    tools = ()
 
     def instruction(self) -> str:
         return (
             "Build the complete learner-facing course using only the supplied browser-verified research URLs. Return exactly "
             "one JSON object and no markdown: "
-            "{curriculum:[{week,title,outcomes,source_urls,overview,estimated_hours,lessons}]}, where each lesson is "
+            "{curriculum:[{week,title,outcomes,source_urls,overview,estimated_hours,lessons}],assessment:{quiz_items,assignment,project}}, where each lesson is "
             "{id,title,objective,paragraphs:[{text,source_urls}],practice,estimated_minutes,source_urls}. Return exactly the "
             "requested number of weeks, "
             "numbered once from 1 through the requested timeline, with at least two complete lessons per week. Respect the "
@@ -25,5 +25,9 @@ class PlannerAgent(LearningAgent):
             "paragraph. Synthesis from multiple sources should cite all of them. Every lesson must include a specific practice "
             "task and use at least two sources across its paragraphs. Copy URLs exactly from the "
             "supplied research object; never invent, shorten, rewrite, or cite any other URL. Every module must include a primary "
-            "source where the verified set provides one and an applied exercise."
+            "source where the verified set provides one and an applied exercise. The assessment must contain 2-5 quiz_items "
+            "per week. Each quiz item is {id,module_week,prompt,choices,correct_answer,explanation}; use 3-5 distinct choices, "
+            "make correct_answer exactly match one choice, and write a specific teaching explanation. The assignment is "
+            "{title,prompt,deliverables,rubric} with 2-8 concrete deliverables and 2-8 observable rubric criteria. The project "
+            "must be a substantial capstone prompt tied to the course outcomes. Do not emit generic study advice or placeholders."
         )
