@@ -58,17 +58,29 @@ sources = [
     for index in range(12)
 ]
 if agent == 'ResearchQueryPlanner':
+    requirements = [
+        ('foundations', 'Which definitions and prerequisites ground Python functions?', 'core'),
+        ('mechanism', 'How do Python functions bind inputs and return outputs?', 'core'),
+        ('examples', 'Which worked examples reveal Python function behavior?', 'core'),
+        ('boundaries', 'Which limitations and boundary cases constrain Python functions?', 'supporting'),
+        ('integration', 'How do Python functions connect to wider program design?', 'core'),
+    ]
     response = {
-        'coverage_requirements': [{
-            'id': 'core', 'question': 'How do Python functions bind inputs and return outputs?',
-            'priority': 'core', 'depth': 'detailed', 'evidence_policy': 'single_source_ok'
-        }],
+        'coverage_requirements': [
+            {'id': identifier, 'question': question, 'priority': priority,
+             'depth': 'detailed', 'evidence_policy': 'single_source_ok'}
+            for identifier, question, priority in requirements
+        ],
         'queries': [
-            {'query': 'Python functions authoritative guide', 'purpose': 'Cover the core mechanism', 'coverage_ids': ['core']}
+            {'query': f'Python functions {identifier} authoritative guide',
+             'purpose': f'Cover {identifier}', 'coverage_ids': [identifier]}
+            for identifier, _question, _priority in requirements
         ],
         'seed_candidates': [
-            {'title': sources[0]['title'], 'url': sources[0]['url'], 'purpose': 'Canonical Python function documentation',
-             'coverage_ids': ['core'], 'kind': 'documentation'}
+            {'title': sources[index]['title'], 'url': sources[index]['url'],
+             'purpose': f'Canonical evidence for {identifier}',
+             'coverage_ids': [identifier], 'kind': sources[index]['kind']}
+            for index, (identifier, _question, _priority) in enumerate(requirements)
         ],
     }
 elif agent == 'ResearchSelector':
@@ -79,6 +91,7 @@ elif agent == 'ResearchSelector':
     ]}
 elif agent == 'ResearchSynthesis':
     pages = request['context']['pages']
+    requirement_ids = ['foundations', 'mechanism', 'examples', 'boundaries', 'integration']
     response = {
         'topic': request['learner_goal']['topic'],
         'sources': [
@@ -87,50 +100,54 @@ elif agent == 'ResearchSynthesis':
                 'rationale': f'Verified evidence for curriculum section {index}',
                 'key_points': [f'Concrete mechanism supported by source {index}',
                                f'Worked example or limitation supported by source {index}'],
-                'coverage_evidence': [{'requirement_id': 'core', 'support': 'strong'}],
+                'coverage_evidence': [{
+                    'requirement_id': requirement_ids[int(page['url'].split('source-')[1])],
+                    'support': 'strong'
+                }],
             }
             for index, page in enumerate(pages)
         ],
     }
 elif agent == 'ResearchCoverageEvaluator':
-    source = request['context']['sources'][0]
+    requirements = request['context']['coverage_requirements']
+    linked = {
+        evidence['requirement_id']: source['url']
+        for source in request['context']['sources']
+        for evidence in source.get('coverage_evidence', [])
+    }
     response = {
-        'assessments': [{
-            'requirement_id': 'core', 'status': 'covered', 'confidence': 0.98,
-            'supported_by': [source['url']], 'rationale': 'The documentation covers the core mechanism.'
-        }],
-        'sufficient': True, 'reason': 'All requirements are covered.'
+        'assessments': [
+            {'requirement_id': item['id'],
+             'status': 'covered' if item['id'] in linked else 'missing',
+             'confidence': 0.98 if item['id'] in linked else 0,
+             'supported_by': [linked[item['id']]] if item['id'] in linked else [],
+             'rationale': f"Evidence for {item['id']} was evaluated."}
+            for item in requirements
+        ],
+        'sufficient': len(linked) == len(requirements), 'reason': 'Coverage was evaluated.'
     }
 elif agent == 'Planner':
-    def paragraphs(label, first_source):
-        items = []
-        for paragraph_index in range(6):
-            sentences = []
-            for detail_index in range(7):
-                sentences.append(
-                    f'{label} paragraph {paragraph_index}, detail {detail_index}, explains a distinct function mechanism with '
-                    f'a concrete input, an observable output, a prediction, a boundary condition, and a validation decision '
-                    f'that helps the learner revise a precise mental model rather than memorize generic advice.'
-                )
-            items.append({'text': ' '.join(sentences),
-                          'source_urls': [sources[0]['url']]})
-        return items
     curriculum = [{'week': 1, 'title': 'Function foundations',
                    'outcomes': ['Define and call a function', 'Validate a result'],
-                   'source_urls': [sources[0]['url']],
+                   'coverage_ids': ['foundations', 'mechanism', 'examples', 'boundaries', 'integration'],
+                   'source_urls': [source['url'] for source in sources[:5]],
                    'overview': 'Build a precise mental model of Python functions, then apply it to observable examples.',
                    'estimated_hours': 3,
                    'lessons': [
                      {'id': 'provider-functions-concepts', 'title': 'Function inputs and outputs',
                       'objective': 'Explain how parameters bind inputs and return values expose outputs.',
-                      'paragraphs': paragraphs('PROVIDER_AUTHORED_CONTENT', 0),
+                      'coverage_ids': ['foundations', 'mechanism', 'examples'],
+                      'section_plan': [f'Concept teaching section {index}' for index in range(6)],
+                      'paragraphs': [],
                       'practice': 'Implement double and three related functions, then record inputs, predicted outputs, and actual outputs.',
-                      'estimated_minutes': 60, 'source_urls': [sources[0]['url']]},
+                      'estimated_minutes': 60, 'source_urls': [source['url'] for source in sources[:3]]},
                      {'id': 'provider-functions-validation', 'title': 'Validate function behavior',
                       'objective': 'Use representative and boundary examples to validate a function result.',
-                      'paragraphs': paragraphs('PROVIDER_VALIDATION_CONTENT', 1),
+                      'coverage_ids': ['boundaries', 'integration'],
+                      'section_plan': [f'Validation teaching section {index}' for index in range(6)],
+                      'paragraphs': [],
                       'practice': 'Write three executable checks for one function and explain what each check demonstrates about its contract.',
-                      'estimated_minutes': 60, 'source_urls': [sources[0]['url']]}
+                      'estimated_minutes': 60, 'source_urls': [source['url'] for source in sources[3:5]]}
                    ]}]
     assessment = {
         'quiz_items': [
@@ -154,6 +171,30 @@ elif agent == 'Planner':
         'project': 'Build a small reusable Python module, validate its public function contracts, and explain the evidence behind each design decision.',
     }
     response = {'curriculum': curriculum, 'assessment': assessment}
+elif agent == 'LessonWriter':
+    draft = request['context']['lesson_draft']
+    target_urls = {
+        target['requirement_id']: target['supported_by'][0]
+        for target in request['context']['coverage_targets']
+    }
+    coverage_ids = draft['coverage_ids']
+    def paragraphs(label):
+        items = []
+        for paragraph_index in range(6):
+            requirement_id = coverage_ids[paragraph_index % len(coverage_ids)]
+            sentences = []
+            for detail_index in range(7):
+                sentences.append(
+                    f'{label} paragraph {paragraph_index}, detail {detail_index}, explains a distinct function mechanism with '
+                    f'a concrete input, an observable output, a prediction, a boundary condition, and a validation decision '
+                    f'that helps the learner revise a precise mental model rather than memorize generic advice.'
+                )
+            items.append({'heading': f'{label} section {paragraph_index}',
+                          'text': ' '.join(sentences),
+                          'coverage_ids': [requirement_id],
+                          'source_urls': [target_urls[requirement_id]]})
+        return items
+    response = {'lesson': {'id': draft['id'], 'paragraphs': paragraphs('LESSON_WRITER_CONTENT')}}
 else:
     raise SystemExit(f'Unexpected agent role: {agent}')
 print(json.dumps({'response': json.dumps(response)}))
@@ -219,13 +260,15 @@ def test_fake_browser_and_gemini_executables_generate_complete_course(tmp_path, 
             )
             assert response.status_code == 200, response.text
             course = response.json()
-            assert len(course["research"]["sources"]) == 1
-            assert len(course["research"]["visited_sources"]) == 1
+            assert len(course["research"]["sources"]) == 5
+            assert len(course["research"]["visited_sources"]) == 5
             assert course["research"]["stop_reason"] == "coverage_satisfied"
-            assert course["research"]["coverage"][0]["status"] == "covered"
+            assert all(
+                item["status"] == "covered" for item in course["research"]["coverage"]
+            )
             assert course["course"]["modules"][0]["lessons"]
             assert course["course"]["modules"][0]["lessons"][0]["content"].startswith(
-                "PROVIDER_AUTHORED_CONTENT"
+                "LESSON_WRITER_CONTENT"
             )
             assert len(course["course"]["modules"][0]["lessons"][0]["paragraphs"]) == 6
             assert all(
@@ -241,7 +284,11 @@ def test_fake_browser_and_gemini_executables_generate_complete_course(tmp_path, 
             )
             assert course["assessment"]["quiz_items"]
             assert course["assessment"]["assignment"]["deliverables"]
-            assert set(course["sessions"]) == {"Researcher", "Planner"}
+            assert set(course["sessions"]) == {
+                "Researcher", "Planner",
+                "LessonWriter:provider-functions-concepts",
+                "LessonWriter:provider-functions-validation",
+            }
             assert all(
                 "correct_answer" not in question and "explanation" not in question
                 for question in course["assessment"]["quiz_items"]
@@ -251,21 +298,23 @@ def test_fake_browser_and_gemini_executables_generate_complete_course(tmp_path, 
             assert saved.status_code == 200, saved.text
             saved_course = saved.json()
             assert saved_course["course"]["modules"][0]["lessons"] == course["course"]["modules"][0]["lessons"]
-            assert len(saved_course["research"]["sources"]) == 1
+            assert len(saved_course["research"]["sources"]) == 5
 
             trace = client.get(f"/learning-runs/{course['id']}/trace", headers=learner)
             assert trace.status_code == 200, trace.text
             trace_body = trace.json()
-            assert {session["agent_name"] for session in trace_body["sessions"]} == {
+            session_names = {session["agent_name"] for session in trace_body["sessions"]}
+            assert {
                 "BrowserResearch", "ResearchQueryPlanner", "ResearchSelector",
                 "ResearchSynthesisPart1", "ResearchCoverageRound1", "Planner",
-            }
+                "LessonWriter",
+            } <= session_names
             assert all(session["transcript"] for session in trace_body["sessions"])
             researcher_trace = next(
                 session for session in trace_body["sessions"]
                 if session["agent_name"] == "BrowserResearch"
             )
-            assert len(researcher_trace["tool_invocations"]) == 1
+            assert len(researcher_trace["tool_invocations"]) == 3
             assert {
                 page["url"]
                 for tool in researcher_trace["tool_invocations"]

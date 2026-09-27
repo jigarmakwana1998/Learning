@@ -93,9 +93,10 @@ Copy `mobile/.env.example` to `mobile/.env`. Set the Supabase Project URL and pu
 `POST /learning-runs` runs a real, evidence-gated pipeline:
 
 1. **Research query planner** derives semantic coverage requirements, focused discovery queries, and optional canonical seeds.
-2. **Adaptive browser research** reads the strongest candidate first, then searches only for remaining evidence gaps while retaining a complete visit ledger.
-3. **Coverage evaluation and synthesis** stop as soon as the requested depth is supported, whether that takes one authoritative source or several complementary sources.
-4. **Planner** creates the complete course, paragraph-level citations, quizzes, answer explanations, assignment, rubric, and project. Invalid or unverified output fails instead of falling back to generic content.
+2. **Adaptive browser research** reads the strongest candidate first, discards leftover candidates after their mapped requirement is covered, and searches only for remaining evidence gaps while retaining a complete visit ledger.
+3. **Coverage evaluation and synthesis** stop only when every curriculum-scale requirement is supported at the requested depth; incomplete research is never presented as a complete course.
+4. **Planner** creates a compact, time-bounded course architecture that maps every verified requirement to modules, lesson blueprints, section plans, assessments, and exact supporting URLs.
+5. **Lesson writers** expand each blueprint into a 1,200-1,800 word lesson. Validation proves every research requirement reaches a cited paragraph and rejects missing, unsupported, repetitive, or generic content.
 
 The adapters support Codex, Gemini CLI, and Antigravity CLI as independent harnesses. LiteLLM is not a harness: it is the mandatory model gateway beneath all three. The application requests the stable `agent-model` alias; changing that alias in `infra/litellm/config.yaml` swaps the underlying LLM without changing harness selection. Gemini CLI is retained as requested; Google's current tooling is transitioning it to Antigravity CLI, so Antigravity remains a separate harness. [Google's Antigravity documentation](https://www.antigravity.google/docs/cli-overview) describes the current CLI; [the Gemini CLI transition notice](https://github.com/google-gemini/gemini-cli/discussions/27274) explains the migration.
 
@@ -125,7 +126,7 @@ backend/app/
 - Agent runs, sessions, tool invocations, and encrypted/redacted transcript entries are persisted. Learners can access only their own data; `/analytics/*` is admin-only.
 - The Expo client includes an admin analytics screen with user and session lists, outcome metrics, and full searchable transcript drill-down.
 - Run the test suite with `cd backend && pytest -q --benchmark-disable`; run benchmarks with `pytest --benchmark-only`. The tests use controlled executable doubles for external CLIs but exercise the same browser-research and course-validation pipeline. Opt-in authenticated CLI evaluation is `python scripts/live_provider_evaluation.py`.
-- Run a complete opt-in live course smoke test with `cd backend && python scripts/live_course_smoke.py`. It consumes Gemini quota, browses public pages, and prints the exact selected source URLs plus course completeness counts.
+- Run a complete opt-in live course smoke test with `cd backend && python scripts/live_course_smoke.py`. It consumes Gemini quota, browses public pages, prints the exact selected source URLs and coverage metrics, and fails unless all research requirements map through modules and lessons to full-length cited paragraphs.
 
 ## Next product milestones
 

@@ -10,8 +10,9 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from app.agents.examiner import ExaminerAgent
+from app.agents.lesson_writer import LessonWriterAgent
 from app.agents.planner import PlannerAgent
-from app.agents.research_pipeline import ResearchSynthesisAgent
+from app.agents.research_pipeline import ResearchQueryPlannerAgent, ResearchSynthesisAgent
 
 
 def main() -> None:
@@ -27,8 +28,10 @@ def main() -> None:
         assert not missing, f"fixture {fixture.get('name', '<unnamed>')} is missing: {sorted(missing)}"
 
     instructions = {
+        "query_planner": ResearchQueryPlannerAgent().instruction(),
         "researcher": ResearchSynthesisAgent().instruction(),
         "planner": PlannerAgent().instruction(),
+        "lesson_writer": LessonWriterAgent().instruction(),
         "examiner": ExaminerAgent().instruction(),
     }
     for agent, terms in baseline["required_agent_output_terms"].items():
