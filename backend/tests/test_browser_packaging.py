@@ -102,7 +102,7 @@ def test_compose_gives_only_api_public_egress_and_ephemeral_browser_state():
 
     # Public browsing is isolated to the API.  Data stores stay on Docker's
     # internal-only network and are never attached to the public-egress network.
-    for service in ("postgres", "neo4j", "qdrant", "minio"):
+    for service in ("postgres",):
         block = _service_block(compose, service)
         assert "networks: [internal]" in block
         assert "edge" not in block

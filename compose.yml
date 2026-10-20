@@ -1,8 +1,14 @@
 name: learning-coach
 
-# Local Docker-first stack. Only Caddy publishes a host port; all stores are
-# private to the internal network. Replace image tags with immutable digests
-# before deploying this file to staging or production.
+# Local Docker-first stack: api, web, litellm, postgres behind Caddy. Only Caddy
+# publishes a host port. Add services here when the app actually needs them.
+# Watch everything with: docker compose logs -f
+# Replace image tags with immutable digests before deploying to staging/production.
+
+x-logging: &logging
+  # Rotate so DEBUG output cannot fill the disk.
+  options: {max-size: "20m", max-file: "5"}
+
 services:
   reverse-proxy:
     image: caddy:2.8.4-alpine
@@ -28,6 +34,7 @@ services:
     mem_limit: 128m
     cpus: "0.25"
     networks: [edge, internal]
+    logging: *logging
     restart: unless-stopped
 
   api:
@@ -40,6 +47,7 @@ services:
       AGENT_BROWSER_CONTENT_BOUNDARIES: "1"
       AGENT_BROWSER_MAX_OUTPUT: "6000"
       AGENT_REASONING_EFFORT: ${AGENT_REASONING_EFFORT:-medium}
+      LOG_LEVEL: ${LOG_LEVEL:-DEBUG}
       AGENT_CHECKPOINT_DATABASE_URL: postgresql://learning_coach:${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}@postgres:5432/learning_coach
       LITELLM_BASE_URL: http://litellm:4000
       LITELLM_API_KEY: ${LITELLM_MASTER_KEY:?Set LITELLM_MASTER_KEY in .env}
@@ -70,6 +78,7 @@ services:
     # edge provides outbound Internet access for public browsing;
     # databases remain isolated on internal and publish no host ports.
     networks: [edge, internal]
+    logging: *logging
     restart: unless-stopped
 
   litellm:
@@ -79,6 +88,7 @@ services:
       DATABASE_URL: postgresql://learning_coach:${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}@postgres:5432/learning_coach
       NVIDIA_API_KEY: ${NVIDIA_API_KEY:?Set NVIDIA_API_KEY in .env}
       LITELLM_MASTER_KEY: ${LITELLM_MASTER_KEY:?Set LITELLM_MASTER_KEY in .env}
+      LITELLM_LOG: ${LOG_LEVEL:-DEBUG}
     depends_on:
       postgres:
         condition: service_healthy
@@ -98,6 +108,7 @@ services:
     mem_limit: 512m
     cpus: "0.75"
     networks: [edge, internal]
+    logging: *logging
     restart: unless-stopped
 
   web:
@@ -114,6 +125,7 @@ services:
     mem_limit: 256m
     cpus: "0.5"
     networks: [edge]
+    logging: *logging
     restart: unless-stopped
 
   postgres:
@@ -140,105 +152,7 @@ services:
       timeout: 5s
       retries: 5
     networks: [internal]
-    restart: unless-stopped
-
-  neo4j:
-    image: neo4j:5.26-community
-    environment:
-      NEO4J_AUTH: neo4j/${NEO4J_PASSWORD:?Set NEO4J_PASSWORD in .env}
-    volumes:
-      - neo4j_data:/data
-      - neo4j_logs:/logs
-    tmpfs: [/tmp]
-    cap_drop: [ALL]
-    cap_add: [CHOWN, DAC_OVERRIDE, FOWNER, SETGID, SETUID]
-    security_opt: [no-new-privileges:true]
-    pids_limit: 300
-    mem_limit: 1g
-    cpus: "1.0"
-    networks: [internal]
-    restart: unless-stopped
-
-  qdrant:
-    image: qdrant/qdrant:v1.13.4
-    volumes:
-      - qdrant_data:/qdrant/storage
-      - qdrant_snapshots:/qdrant/snapshots
-    read_only: true
-    tmpfs: [/tmp]
-    cap_drop: [ALL]
-    security_opt: [no-new-privileges:true]
-    pids_limit: 200
-    mem_limit: 512m
-    cpus: "0.75"
-    networks: [internal]
-    restart: unless-stopped
-
-  minio:
-    image: pgsty/minio:RELEASE.2026-08-04T00-00-00Z
-    command: server /data --console-address :9001
-    environment:
-      MINIO_ROOT_USER: ${MINIO_ROOT_USER:?Set MINIO_ROOT_USER in .env}
-      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:?Set MINIO_ROOT_PASSWORD in .env}
-    volumes:
-      - minio_data:/data
-    read_only: true
-    tmpfs: [/tmp]
-    cap_drop: [ALL]
-    security_opt: [no-new-privileges:true]
-    pids_limit: 200
-    mem_limit: 512m
-    cpus: "0.75"
-    networks: [internal]
-    restart: unless-stopped
-
-  prometheus:
-    image: prom/prometheus:v3.1.0
-    command: ["--config.file=/etc/prometheus/prometheus.yml", "--storage.tsdb.path=/prometheus"]
-    volumes:
-      - ./infra/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
-      - prometheus_data:/prometheus
-    read_only: true
-    tmpfs: [/tmp]
-    cap_drop: [ALL]
-    security_opt: [no-new-privileges:true]
-    pids_limit: 100
-    mem_limit: 512m
-    cpus: "0.5"
-    networks: [internal]
-    restart: unless-stopped
-
-  loki:
-    image: grafana/loki:3.3.2
-    command: -config.file=/etc/loki/local-config.yaml
-    volumes:
-      - loki_data:/loki
-    read_only: true
-    tmpfs: [/tmp]
-    cap_drop: [ALL]
-    security_opt: [no-new-privileges:true]
-    pids_limit: 100
-    mem_limit: 512m
-    cpus: "0.5"
-    networks: [internal]
-    restart: unless-stopped
-
-  grafana:
-    image: grafana/grafana:11.4.0
-    environment:
-      GF_SECURITY_ADMIN_USER: ${GRAFANA_ADMIN_USER:-admin}
-      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:?Set GRAFANA_ADMIN_PASSWORD in .env}
-      GF_SERVER_HTTP_PORT: 3000
-    volumes:
-      - grafana_data:/var/lib/grafana
-    read_only: true
-    tmpfs: [/tmp]
-    cap_drop: [ALL]
-    security_opt: [no-new-privileges:true]
-    pids_limit: 150
-    mem_limit: 512m
-    cpus: "0.5"
-    networks: [internal]
+    logging: *logging
     restart: unless-stopped
 
 networks:
@@ -250,11 +164,3 @@ volumes:
   caddy_data: {}
   caddy_config: {}
   postgres_data: {}
-  neo4j_data: {}
-  neo4j_logs: {}
-  qdrant_data: {}
-  qdrant_snapshots: {}
-  minio_data: {}
-  prometheus_data: {}
-  loki_data: {}
-  grafana_data: {}
