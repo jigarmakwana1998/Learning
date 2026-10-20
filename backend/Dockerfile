@@ -38,13 +38,41 @@ RUN apt-get update \
         libstdc++6=12.2.0-14+deb12u1 \
         # Chrome runtime libraries. `agent-browser install --with-deps` needs
         # sudo, which this image lacks, so it silently skipped them.
-        # ponytail: unpinned, pin if Debian updates ever break Chrome.
-        libxcb-shm0 libx11-xcb1 libx11-6 libxcb1 libxext6 libxrandr2 libxcomposite1 \
-        libxcursor1 libxdamage1 libxfixes3 libxi6 libgtk-3-0 libpangocairo-1.0-0 \
-        libpango-1.0-0 libatk1.0-0 libcairo-gobject2 libcairo2 libgdk-pixbuf-2.0-0 \
-        libxrender1 libasound2 libfreetype6 libfontconfig1 libdbus-1-3 libnss3 libnspr4 \
-        libatk-bridge2.0-0 libdrm2 libxkbcommon0 libatspi2.0-0 libcups2 libxshmfence1 \
-        libgbm1 fonts-noto-color-emoji fonts-noto-cjk fonts-freefont-ttf \
+        fonts-freefont-ttf=20120503-10 \
+        fonts-noto-cjk=1:20220127+repack1-1 \
+        fonts-noto-color-emoji=2.042-0+deb12u1 \
+        libasound2=1.2.8-1+b1 \
+        libatk-bridge2.0-0=2.46.0-5 \
+        libatk1.0-0=2.46.0-5 \
+        libatspi2.0-0=2.46.0-5 \
+        libcairo-gobject2=1.16.0-7 \
+        libcairo2=1.16.0-7 \
+        libcups2=2.4.2-3+deb12u9 \
+        libdbus-1-3=1.14.10-1~deb12u1 \
+        libdrm2=2.4.114-1+b1 \
+        libfontconfig1=2.14.1-4 \
+        libfreetype6=2.12.1+dfsg-5+deb12u4 \
+        libgbm1=22.3.6-1+deb12u2 \
+        libgdk-pixbuf-2.0-0=2.42.10+dfsg-1+deb12u4 \
+        libgtk-3-0=3.24.38-2~deb12u3 \
+        libnspr4=2:4.35-1 \
+        libnss3=2:3.87.1-1+deb12u4 \
+        libpango-1.0-0=1.50.12+ds-1 \
+        libpangocairo-1.0-0=1.50.12+ds-1 \
+        libx11-6=2:1.8.4-2+deb12u2 \
+        libx11-xcb1=2:1.8.4-2+deb12u2 \
+        libxcb-shm0=1.15-1 \
+        libxcb1=1.15-1 \
+        libxcomposite1=1:0.4.5-1 \
+        libxcursor1=1:1.2.1-1 \
+        libxdamage1=1:1.1.6-1 \
+        libxext6=2:1.3.4-1+b1 \
+        libxfixes3=1:6.0.0-2 \
+        libxi6=2:1.8-1+b1 \
+        libxkbcommon0=1.5.0-1 \
+        libxrandr2=2:1.5.2-2+b1 \
+        libxrender1=1:0.9.10-1.1 \
+        libxshmfence1=1.3-1 \
     && ln -s /usr/local/lib/node_modules/npm/bin/npm-cli.js /usr/local/bin/npm \
     && ln -s /usr/local/lib/node_modules/npm/bin/npx-cli.js /usr/local/bin/npx \
     && mkdir -p /opt/agent-browser-cache \

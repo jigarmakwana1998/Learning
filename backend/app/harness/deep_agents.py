@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import sys
 from collections.abc import AsyncIterator, Awaitable, Callable
 from contextlib import asynccontextmanager
@@ -26,6 +27,8 @@ from pydantic import BaseModel
 
 from app.agents.contracts import output_schema_for
 from app.core.config import Settings, get_settings
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -63,6 +66,7 @@ class AgentEventCollector(AsyncCallbackHandler):
         name = str((serialized or {}).get("name") or "tool")
         payload = self._safe_input(inputs or {"input": input_str})
         self.started[run_id] = (name, perf_counter(), payload)
+        logger.info("tool.start %s input=%.300s", name, json.dumps(payload, default=str))
 
     async def on_tool_end(self, output: Any, *, run_id: UUID, **_: Any) -> None:
         name, started, payload = self.started.pop(run_id, ("tool", perf_counter(), {}))
@@ -71,14 +75,29 @@ class AgentEventCollector(AsyncCallbackHandler):
         metadata = self._safe_metadata(name, payload, result)
         self._collect_urls(name, result)
         self.tool_events.append(ToolInvocationEvent(name, "success", metadata, duration_ms=duration_ms))
+        logger.info("tool.end %s %dms output=%.300s", name, duration_ms, json.dumps(result, default=str))
 
     async def on_tool_error(self, error: BaseException, *, run_id: UUID, **_: Any) -> None:
         name, started, payload = self.started.pop(run_id, ("tool", perf_counter(), {}))
         duration_ms = int((perf_counter() - started) * 1000)
         message = str(error)[:2000]
+        logger.warning("tool.error %s %dms error=%.300s", name, duration_ms, message)
         self.tool_events.append(
             ToolInvocationEvent(name, "failed", {"input": payload}, error=message, duration_ms=duration_ms)
         )
+
+    async def on_chat_model_start(self, serialized: dict[str, Any] | None, messages: list[list[Any]], *, run_id: UUID, **_: Any) -> None:
+        self.started[run_id] = ("model", perf_counter(), {})
+        logger.info("model.start messages=%d", sum(len(batch) for batch in messages))
+
+    async def on_llm_end(self, response: Any, *, run_id: UUID, **_: Any) -> None:
+        _, started, _ = self.started.pop(run_id, ("model", perf_counter(), {}))
+        usage = (getattr(response, "llm_output", None) or {}).get("token_usage") or {}
+        logger.info("model.end %dms usage=%s", int((perf_counter() - started) * 1000), usage)
+
+    async def on_llm_error(self, error: BaseException, *, run_id: UUID, **_: Any) -> None:
+        _, started, _ = self.started.pop(run_id, ("model", perf_counter(), {}))
+        logger.warning("model.error %dms error=%.300s", int((perf_counter() - started) * 1000), error)
 
     async def on_chain_start(
         self,
