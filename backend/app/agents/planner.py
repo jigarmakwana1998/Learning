@@ -10,9 +10,8 @@ class PlannerAgent(LearningAgent):
     def instruction(self) -> str:
         return (
             "Design the complete course architecture using only the supplied browser-verified research. A separate lesson "
-            "writer will expand each lesson, so keep this response compact and do not write lesson prose. Return exactly "
-            "one JSON object and no markdown: "
-            "{curriculum:[{week,title,outcomes,coverage_ids,source_urls,overview,estimated_hours,lessons}],assessment:{quiz_items,assignment,project}}, where each lesson is "
+            "writer will expand each lesson, so keep this response compact and do not write lesson prose. Populate the "
+            "structured curriculum and assessment fields; each lesson is "
             "{id,title,objective,coverage_ids,section_plan,paragraphs:[],practice,estimated_minutes,source_urls}. Return exactly the "
             "requested number of weeks, "
             "numbered once from 1 through the requested timeline, with at least two complete lessons per week. Respect the "

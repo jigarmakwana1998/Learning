@@ -10,8 +10,7 @@ class LessonWriterAgent(LearningAgent):
     def instruction(self) -> str:
         return (
             "Write the complete body for exactly one planned lesson using only the supplied browser-verified research. "
-            "Return exactly one JSON object and no markdown: "
-            "{lesson:{id,paragraphs:[{heading,text,coverage_ids,source_urls}]}}. Copy the "
+            "Populate the structured lesson and paragraph fields. Copy the "
             "lesson id exactly. Return exactly one distinct paragraph for each item in lesson_draft.section_plan, in the same "
             "order, totaling 1,200-1,800 substantive words (roughly 200-300 words per paragraph). Cover every item in "
             "context.coverage_targets in at least one "

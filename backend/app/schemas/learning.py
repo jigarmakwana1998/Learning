@@ -3,12 +3,7 @@ from typing import Literal
 
 from pydantic import BaseModel, Field
 
-AgentHarness = Literal["codex", "gemini-cli", "antigravity-cli"]
-LIVE_AGENT_HARNESSES: tuple[AgentHarness, ...] = (
-    "codex",
-    "gemini-cli",
-    "antigravity-cli",
-)
+AgentHarness = Literal["deep-agents"]
 
 
 class LearningGoal(BaseModel):
@@ -20,10 +15,6 @@ class LearningGoal(BaseModel):
 
 class LearningRunRequest(LearningGoal):
     pass
-
-
-class AgentHarnessSetting(BaseModel):
-    harness: AgentHarness
 
 
 class Source(BaseModel):

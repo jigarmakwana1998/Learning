@@ -20,12 +20,12 @@ from app.harness import AgentHarness
 from app.mcp.audit import record_tool_invocation, record_trace_event
 from app.models.database import (
     AgentRun, AgentSessionRecord, AssignmentSubmissionRecord, LearningRequest,
-    LessonProgressRecord, QuizSubmissionRecord, SystemSetting, TranscriptEntryRecord, User,
+    LessonProgressRecord, QuizSubmissionRecord, TranscriptEntryRecord, User,
 )
 from app.schemas.learning import (
     Assessment, AssignmentSubmissionResponse, Course, CurriculumModule,
     LearningGoal, LearningProgressResponse, LearningRun, LearningRunRequest, Lesson,
-    LIVE_AGENT_HARNESSES, QuizQuestionFeedback, QuizSubmissionResponse, ResearchBrief, Source,
+    QuizQuestionFeedback, QuizSubmissionResponse, ResearchBrief, Source,
     SourceVisit,
 )
 
@@ -34,11 +34,7 @@ class LearningService:
     browser_gateway_factory = BrowserGateway
 
     async def create_run(self, db: AsyncSession, user: User, request: LearningRunRequest) -> LearningRun:
-        configured = await db.scalar(select(SystemSetting).where(SystemSetting.key == "agent_harness"))
-        configured_harness = configured.value if configured else get_settings().agent_harness
-        harness_name = configured_harness if configured_harness in LIVE_AGENT_HARNESSES else "gemini-cli"
-        if harness_name not in LIVE_AGENT_HARNESSES:
-            raise ValueError("Unsupported agent harness")
+        harness_name = "deep-agents"
         goal = LearningGoal.model_validate(request)
         learning_request = LearningRequest(user_id=user.id, topic=goal.topic, level=goal.level, hours_per_week=goal.hours_per_week, weeks=goal.weeks)
         db.add(learning_request)
@@ -1001,7 +997,7 @@ class LearningService:
 
     @staticmethod
     def _source_kind_hint(title: str, url: str) -> str | None:
-        """Infer only high-confidence source types; leave ambiguous pages to Gemini."""
+        """Infer only high-confidence source types; leave ambiguous pages to the agent."""
         text = f"{title} {url}".casefold()
         host = urlsplit(url).hostname or ""
         if host == "arxiv.org" or "doi.org/" in text or " paper" in text:

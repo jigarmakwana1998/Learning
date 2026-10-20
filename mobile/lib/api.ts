@@ -10,7 +10,7 @@ export type CourseLesson = { id: string; title: string; objective: string; conte
 export type CourseModule = { week: number; title: string; outcomes: string[]; source_urls?: string[]; overview?: string; estimated_hours?: number; lessons?: CourseLesson[] };
 export type QuizItem = { id: string; module_week: number; prompt: string; choices: string[] };
 export type AssignmentPrompt = { title: string; prompt: string; deliverables: string[]; rubric: string[] };
-export type AgentHarness = "codex" | "gemini-cli" | "antigravity-cli";
+export type AgentHarness = "deep-agents";
 export type LearningRun = { id: string; harness: AgentHarness; research: { topic: string; sources: Source[]; visited_sources?: SourceVisit[]; coverage?: ResearchCoverage[]; stop_reason?: "coverage_satisfied" | "budget_exhausted" | "no_new_evidence" | null; warnings?: string[]; research_stats?: ResearchStats }; curriculum: CourseModule[]; assessment: { quiz: QuizItem[]; quiz_items?: QuizItem[]; assignment: AssignmentPrompt; project: string }; sessions: Record<string, string> };
 export type AnalyticsOverview = { total_users: number; total_requests: number; completed_runs: number; failed_runs: number; active_sessions: number; transcript_entries: number; average_session_duration_ms: number };
 export type Session = { id: string; agent_name: string; harness: AgentHarness; status: string; learning_request_id: string; topic: string; duration_ms: number | null; started_at: string };
@@ -46,5 +46,3 @@ export const getUsers = () => request<{ items: User[] }>("/analytics/users");
 export const getSessions = () => request<Session[]>("/analytics/sessions");
 export const getTranscript = (id: string) => request<TranscriptSession>(`/agent-sessions/${id}`);
 export const getLearningRunTrace = (id: string) => request<LearningRunTrace>(`/learning-runs/${id}/trace`);
-export const getAgentHarness = () => request<{ harness: AgentHarness }>("/analytics/settings/agent-harness");
-export const setAgentHarness = (harness: AgentHarness) => request<{ harness: AgentHarness }>("/analytics/settings/agent-harness", { method: "PUT", body: JSON.stringify({ harness }) });

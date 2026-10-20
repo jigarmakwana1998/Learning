@@ -62,7 +62,7 @@ export default function LessonValidationPage() {
 
         <div className="mb-5 flex gap-3 rounded-xl border border-amber-300 bg-amber-50 p-4 text-sm leading-6 text-amber-950 dark:border-amber-800 dark:bg-amber-950 dark:text-amber-100">
           <TriangleAlert className="mt-0.5 shrink-0" size={19} aria-hidden="true" />
-          <p><strong>Review boundary:</strong> the prose below is a real Gemini baseline generated before the new coverage ledger. The structural checks are current. A fresh provider lesson is still the final acceptance gate before merge and freeze.</p>
+          <p><strong>Review boundary:</strong> the prose below is a provider baseline generated before the new coverage ledger. The structural checks are current. A fresh provider lesson is still the final acceptance gate before merge and freeze.</p>
         </div>
 
         {tab === "lesson" ? <LessonOutput /> : <ValidationOutput />}
