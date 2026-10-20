@@ -10,7 +10,7 @@
    ```
 
 2. In `backend/.env`, retain the application secrets. In the root `.env`, set a
-   strong `LITELLM_MASTER_KEY` and the `NVIDIA_API_KEY` consumed only by the
+   strong `LITELLM_MASTER_KEY` and the `OPENROUTER_API_KEY` and `NVIDIA_API_KEY` consumed only by the
    LiteLLM service. The Compose stack overrides `DATABASE_URL`, the Deep Agents
    checkpoint database, and `LITELLM_BASE_URL` for its internal services.
 3. Start the stack from the repository root:

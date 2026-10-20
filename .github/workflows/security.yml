@@ -42,6 +42,7 @@ jobs:
           POSTGRES_PASSWORD: ci-postgres-password
           LITELLM_MASTER_KEY: sk-ci
           NVIDIA_API_KEY: ci-nvidia-key
+          OPENROUTER_API_KEY: ci-openrouter-key
         run: |
           cp backend/.env.example backend/.env
           docker compose -f compose.yml config --quiet

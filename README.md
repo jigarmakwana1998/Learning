@@ -41,7 +41,7 @@ sh ./scripts/setup-browser-tools.sh
 The scripts use `npm ci`, so the browser version comes from the committed
 lockfile. They install Chrome for Testing and run agent-browser's offline
 diagnostics. The Docker image performs the same setup automatically. Put the
-NVIDIA API key only in the repository-root `.env`; LiteLLM owns that credential,
+OpenRouter and NVIDIA API keys only in the repository-root `.env`; LiteLLM owns those credentials,
 and the API receives only its LiteLLM master key.
 
 ```bash
@@ -58,7 +58,8 @@ For local PostgreSQL, run `docker compose -f docker-compose.yml up -d` from `bac
 
 The API docs are available at `http://127.0.0.1:8000/docs`. Course generation
 always uses Deep Agents with public browser research. The stable `agent-model`
-LiteLLM alias currently resolves to NVIDIA's `z-ai/glm-5.3-flash` endpoint.
+LiteLLM alias currently resolves to OpenRouter's free `minimax/minimax-m3.1-flash:free`,
+falling back to NVIDIA's `z-ai/glm-5.3-flash` while it is rate-limited.
 
 Local development may use SQLite for application data, but authentication still
 requires Supabase. Both frontends call the backend auth endpoints; Supabase keys
