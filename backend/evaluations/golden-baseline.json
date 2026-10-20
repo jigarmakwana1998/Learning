@@ -3,9 +3,8 @@
   "required_fixture_fields": ["name", "topic", "level", "hours_per_week", "weeks"],
   "required_agent_output_terms": {
     "query_planner": ["coverage_requirements", "5-10", "every requirement", "exact topic"],
-    "researcher": ["JSON", "sources", "url", "coverage_evidence"],
-    "planner": ["JSON", "coverage_ids", "section_plan", "paragraphs:[]"],
-    "lesson_writer": ["coverage_targets", "1,200-1,800", "supported_by"],
-    "examiner": ["JSON"]
+    "researcher": ["structured", "sources", "url", "coverage_evidence"],
+    "planner": ["structured", "coverage_ids", "section_plan", "paragraphs:[]"],
+    "lesson_writer": ["structured", "coverage_targets", "1,200-1,800", "supported_by"]
   }
 }
