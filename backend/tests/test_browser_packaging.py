@@ -28,17 +28,13 @@ def test_browser_toolchain_is_exactly_pinned_in_manifest_and_lockfile():
     manifest = json.loads((PROJECT_ROOT / "package.json").read_text(encoding="utf-8"))
     lock = json.loads((PROJECT_ROOT / "package-lock.json").read_text(encoding="utf-8"))
 
-    expected = {
-        "@google/gemini-cli": "0.51.0",
-        "agent-browser": "0.27.3",
-    }
+    expected = {"agent-browser": "0.27.3"}
     assert manifest["private"] is True
     assert manifest["engines"]["node"] == ">=24.0.0"
     assert manifest["dependencies"] == expected
     assert lock["packages"][""]["name"] == manifest["name"]
     assert lock["packages"][""]["engines"] == manifest["engines"]
     assert lock["packages"][""]["dependencies"] == expected
-    assert lock["packages"]["node_modules/@google/gemini-cli"]["version"] == "0.51.0"
     browser_package = lock["packages"]["node_modules/agent-browser"]
     assert browser_package["version"] == "0.27.3"
     # The pinned browser CLI requires Node 24.  Keep the container in sync with
@@ -82,7 +78,7 @@ def test_api_image_contains_pinned_node_toolchain_and_chrome_installation():
     assert "npm ci" in dockerfile
     assert "agent-browser install --with-deps" in dockerfile
     assert re.search(r"agent-browser\s+(?:--version|doctor)", dockerfile)
-    assert re.search(r"gemini\s+--version", dockerfile)
+    assert "gemini" not in dockerfile.casefold()
     assert re.search(r"(?mi)^USER app\s*$", dockerfile)
 
 
@@ -96,14 +92,12 @@ def test_compose_gives_only_api_public_egress_and_ephemeral_browser_state():
         "/tmp",
         "/dev/shm",
         "/home/app/.cache",
-        "/home/app/.gemini",
         "/home/app/.agent-browser",
     ):
         assert path in api
     assert "pids_limit: 512" in api
     assert "mem_limit: 2g" in api
     assert 'cpus: "2.0"' in api
-    assert "command -v gemini" in api
     assert "command -v agent-browser" in api
 
     # Public browsing is isolated to the API.  Data stores stay on Docker's
@@ -115,3 +109,10 @@ def test_compose_gives_only_api_public_egress_and_ephemeral_browser_state():
 
     networks = compose.split("\nnetworks:\n", maxsplit=1)[1]
     assert re.search(r"(?m)^  internal:\s*\n    internal: true$", networks)
+
+
+def test_litellm_mcp_client_imports_with_pinned_mcp():
+    # litellm>=1.103 imports mcp 2 types here and broke /learning-runs at runtime.
+    import importlib
+
+    importlib.import_module("litellm.experimental_mcp_client")

@@ -5,31 +5,10 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import get_db
 from app.core.dependencies import get_admin
-from app.core.config import get_settings
-from app.models.database import AgentRun, AgentSessionRecord, LearningRequest, SystemSetting, TranscriptEntryRecord, User
+from app.models.database import AgentRun, AgentSessionRecord, LearningRequest, TranscriptEntryRecord, User
 from app.schemas.analytics import AnalyticsOverview, RequestListItem, SessionListItem
-from app.schemas.learning import AgentHarnessSetting, LIVE_AGENT_HARNESSES
 
 router = APIRouter(prefix="/analytics", tags=["analytics"])
-
-
-@router.get("/settings/agent-harness", response_model=AgentHarnessSetting)
-async def get_agent_harness(db: AsyncSession = Depends(get_db), _: User = Depends(get_admin)) -> AgentHarnessSetting:
-    setting = await db.scalar(select(SystemSetting).where(SystemSetting.key == "agent_harness"))
-    configured = setting.value if setting and setting.value in LIVE_AGENT_HARNESSES else get_settings().agent_harness
-    harness = configured if configured in LIVE_AGENT_HARNESSES else "gemini-cli"
-    return AgentHarnessSetting(harness=harness)
-
-
-@router.put("/settings/agent-harness", response_model=AgentHarnessSetting)
-async def set_agent_harness(payload: AgentHarnessSetting, db: AsyncSession = Depends(get_db), _: User = Depends(get_admin)) -> AgentHarnessSetting:
-    setting = await db.scalar(select(SystemSetting).where(SystemSetting.key == "agent_harness"))
-    if setting is None:
-        db.add(SystemSetting(key="agent_harness", value=payload.harness))
-    else:
-        setting.value = payload.harness
-    await db.commit()
-    return payload
 
 
 @router.get("/overview", response_model=AnalyticsOverview)

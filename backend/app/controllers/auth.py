@@ -1,10 +1,10 @@
-from fastapi import APIRouter, Depends, HTTPException
-from sqlalchemy import select
-from sqlalchemy.ext.asyncio import AsyncSession
+from typing import NoReturn
 
-from app.core.database import get_db
+import httpx
+from fastapi import APIRouter, Depends, HTTPException
+
+from app.core import supabase
 from app.core.dependencies import get_current_user
-from app.core.security import create_access_token, hash_password, verify_password
 from app.models.database import User
 from app.schemas.auth import LoginRequest, RegisterRequest, TokenResponse, UserResponse
 
@@ -12,22 +12,51 @@ router = APIRouter(prefix="/auth", tags=["auth"])
 
 
 @router.post("/register", response_model=TokenResponse, status_code=201)
-async def register(payload: RegisterRequest, db: AsyncSession = Depends(get_db)) -> TokenResponse:
-    if await db.scalar(select(User).where(User.email == payload.email.lower())):
-        raise HTTPException(status_code=409, detail="Email is already registered")
-    user = User(email=payload.email.lower(), password_hash=hash_password(payload.password))
-    db.add(user); await db.commit(); await db.refresh(user)
-    return TokenResponse(access_token=create_access_token(user.id, user.role), role=user.role)
+async def register(payload: RegisterRequest) -> TokenResponse:
+    response = await supabase.request("POST", "/auth/v1/signup", json=_credentials(payload))
+    if not response.is_success:
+        _raise_auth_error(response, 400, "Registration failed")
+    return _token_response(response)
 
 
 @router.post("/login", response_model=TokenResponse)
-async def login(payload: LoginRequest, db: AsyncSession = Depends(get_db)) -> TokenResponse:
-    user = await db.scalar(select(User).where(User.email == payload.email.lower()))
-    if not user or not verify_password(payload.password, user.password_hash):
-        raise HTTPException(status_code=401, detail="Invalid email or password")
-    return TokenResponse(access_token=create_access_token(user.id, user.role), role=user.role)
+async def login(payload: LoginRequest) -> TokenResponse:
+    response = await supabase.request(
+        "POST",
+        "/auth/v1/token",
+        params={"grant_type": "password"},
+        json=_credentials(payload),
+    )
+    if not response.is_success:
+        _raise_auth_error(response, 401, "Invalid email or password")
+    return _token_response(response)
 
 
 @router.get("/me", response_model=UserResponse)
 async def me(user: User = Depends(get_current_user)) -> User:
     return user
+
+
+def _credentials(payload: RegisterRequest) -> dict[str, str]:
+    return {"email": payload.email.lower(), "password": payload.password}
+
+
+def _token_response(response: httpx.Response) -> TokenResponse:
+    data = response.json()
+    user = data.get("user") or {}
+    role = "admin" if user.get("app_metadata", {}).get("role") == "admin" else "learner"
+    token = data.get("access_token")
+    return TokenResponse(
+        access_token=token,
+        role=role,
+        message=None if token else "Check your inbox to confirm your email, then sign in.",
+    )
+
+
+def _raise_auth_error(response: httpx.Response, status_code: int, fallback: str) -> NoReturn:
+    try:
+        body = response.json()
+    except ValueError:
+        body = {}
+    detail = body.get("msg") or body.get("message") or body.get("error_description") or fallback
+    raise HTTPException(status_code=status_code, detail=detail)

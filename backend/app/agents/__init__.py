@@ -1,4 +1,3 @@
-from .examiner import ExaminerAgent
 from .lesson_writer import LessonWriterAgent
 from .planner import PlannerAgent
 from .research_pipeline import (
@@ -7,7 +6,6 @@ from .research_pipeline import (
 )
 
 __all__ = [
-    "ExaminerAgent",
     "LessonWriterAgent",
     "PlannerAgent",
     "ResearchCoverageEvaluatorAgent",

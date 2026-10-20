@@ -20,12 +20,12 @@ from app.harness import AgentHarness
 from app.mcp.audit import record_tool_invocation, record_trace_event
 from app.models.database import (
     AgentRun, AgentSessionRecord, AssignmentSubmissionRecord, LearningRequest,
-    LessonProgressRecord, QuizSubmissionRecord, SystemSetting, TranscriptEntryRecord, User,
+    LessonProgressRecord, QuizSubmissionRecord, TranscriptEntryRecord, User,
 )
 from app.schemas.learning import (
     Assessment, AssignmentSubmissionResponse, Course, CurriculumModule,
     LearningGoal, LearningProgressResponse, LearningRun, LearningRunRequest, Lesson,
-    LIVE_AGENT_HARNESSES, QuizQuestionFeedback, QuizSubmissionResponse, ResearchBrief, Source,
+    QuizQuestionFeedback, QuizSubmissionResponse, ResearchBrief, Source,
     SourceVisit,
 )
 
@@ -34,11 +34,7 @@ class LearningService:
     browser_gateway_factory = BrowserGateway
 
     async def create_run(self, db: AsyncSession, user: User, request: LearningRunRequest) -> LearningRun:
-        configured = await db.scalar(select(SystemSetting).where(SystemSetting.key == "agent_harness"))
-        configured_harness = configured.value if configured else get_settings().agent_harness
-        harness_name = configured_harness if configured_harness in LIVE_AGENT_HARNESSES else "gemini-cli"
-        if harness_name not in LIVE_AGENT_HARNESSES:
-            raise ValueError("Unsupported agent harness")
+        harness_name = "deep-agents"
         goal = LearningGoal.model_validate(request)
         learning_request = LearningRequest(user_id=user.id, topic=goal.topic, level=goal.level, hours_per_week=goal.hours_per_week, weeks=goal.weeks)
         db.add(learning_request)
@@ -52,6 +48,7 @@ class LearningService:
             research_session, research = await self._browser_research(
                 db, run.id, harness_name, goal
             )
+            self._require_complete_research(research)
             planner_session, planner_output = await harness.start_and_run(
                 run.id, planner.name, planner.build_prompt(goal, research.model_dump())
             )
@@ -86,7 +83,7 @@ class LearningService:
         research: ResearchBrief,
         planner_output: dict,
     ) -> tuple[dict, dict[str, str]]:
-        """Use live lesson-writer calls when a planner outline is not yet page-length."""
+        """Expand compact lesson blueprints with requirement-targeted evidence."""
         expanded_output = json.loads(json.dumps(planner_output))
         curriculum = expanded_output.get("curriculum")
         if not isinstance(curriculum, list):
@@ -107,7 +104,7 @@ class LearningService:
                     lesson["id"] = str(lesson["id"])
         writer = LessonWriterAgent()
         sessions: dict[str, str] = {}
-        verified_sources = [source.model_dump(mode="json") for source in research.sources]
+        coverage_by_id = {item.requirement_id: item for item in research.coverage}
         for module in curriculum:
             if not isinstance(module, dict) or not isinstance(module.get("lessons"), list):
                 continue
@@ -120,9 +117,45 @@ class LearningService:
                     for paragraph in paragraphs or []
                     if isinstance(paragraph, dict)
                 )
-                if word_count >= 1000:
+                has_complete_metadata = all(
+                    isinstance(paragraph, dict)
+                    and str(paragraph.get("heading") or "").strip()
+                    and isinstance(paragraph.get("coverage_ids"), list)
+                    and paragraph["coverage_ids"]
+                    for paragraph in paragraphs or []
+                )
+                if word_count >= 1200 and has_complete_metadata:
                     continue
                 lesson_id = str(lesson.get("id") or "")
+                coverage_ids = [
+                    str(value) for value in lesson.get("coverage_ids", [])
+                    if str(value) in coverage_by_id
+                ]
+                declared_coverage_ids = [
+                    str(value) for value in lesson.get("coverage_ids", [])
+                ]
+                if coverage_by_id and (
+                    not coverage_ids
+                    or len(set(declared_coverage_ids)) != len(coverage_ids)
+                    or any(coverage_by_id[item].status != "covered" for item in coverage_ids)
+                ):
+                    raise ValueError(
+                        f"Planner must assign covered research requirements to lesson {lesson_id}."
+                    )
+                coverage_targets = [
+                    coverage_by_id[requirement_id].model_dump(mode="json")
+                    for requirement_id in coverage_ids
+                ]
+                target_urls = {
+                    url
+                    for target in coverage_targets
+                    for url in target.get("supported_by", [])
+                }
+                verified_sources = [
+                    source.model_dump(mode="json")
+                    for source in research.sources
+                    if not target_urls or source.url in target_urls
+                ]
                 session, output = await harness.start_and_run(
                     run_id,
                     writer.name,
@@ -135,6 +168,7 @@ class LearningService:
                                 "outcomes": module.get("outcomes"),
                             },
                             "lesson_draft": lesson,
+                            "coverage_targets": coverage_targets,
                             "verified_sources": verified_sources,
                         },
                     ),
@@ -232,7 +266,16 @@ class LearningService:
                     stop_reason = "budget_exhausted"
                     break
 
-                available = [item for item in candidates if item["url"] not in consumed_candidates]
+                unresolved = [item for item in coverage if item["status"] != "covered"]
+                unresolved_ids = {str(item["requirement_id"]) for item in unresolved}
+                available = [
+                    item for item in candidates
+                    if item["url"] not in consumed_candidates
+                    and (
+                        not isinstance(item.get("coverage_ids"), list)
+                        or bool(unresolved_ids.intersection(map(str, item["coverage_ids"])))
+                    )
+                ]
                 if not available:
                     if searches >= settings.research_max_searches:
                         stop_reason = "budget_exhausted"
@@ -241,6 +284,11 @@ class LearningService:
                         (
                             item for item in query_queue
                             if item["query"].casefold() not in seen_queries
+                            and bool(
+                                unresolved_ids.intersection(
+                                    map(str, item.get("coverage_ids", []))
+                                )
+                            )
                         ),
                         None,
                     )
@@ -279,9 +327,8 @@ class LearningService:
                         candidates.append(candidate)
                     continue
 
-                unresolved = [item for item in coverage if item["status"] != "covered"]
                 max_selections = min(
-                    1 if rounds == 0 else 4,
+                    1 if rounds == 0 else 2,
                     settings.research_max_pages - pages_attempted,
                     len(available),
                 )
@@ -558,10 +605,17 @@ class LearningService:
             if allow_fallback:
                 return cls._fallback_query_plan(goal)
             raise ValueError("ResearchQueryPlanner did not define usable coverage requirements.")
+        minimum_requirements = cls._minimum_coverage_requirement_count(goal)
+        if len(requirements) < minimum_requirements or len(requirements) > 10:
+            if allow_fallback:
+                return cls._fallback_query_plan(goal)
+            raise ValueError(
+                "ResearchQueryPlanner must define "
+                f"{minimum_requirements}-10 complementary curriculum coverage requirements."
+            )
         if not any(item["priority"] == "core" for item in requirements):
             requirements[0]["priority"] = "core"
         allowed_ids = {str(item["id"]) for item in requirements}
-        default_coverage = [str(next(item["id"] for item in requirements if item["priority"] == "core"))]
 
         queries: list[dict[str, object]] = []
         seen_queries: set[str] = set()
@@ -570,16 +624,19 @@ class LearningService:
             for item in raw_queries:
                 if not isinstance(item, dict):
                     continue
-                query = " ".join(str(item.get("query") or "").split())[:300]
+                query = " ".join(str(item.get("query") or "").split())
                 purpose = " ".join(str(item.get("purpose") or "").split())[:300]
-                normalized = query.casefold()
-                if len(query) < 3 or normalized in seen_queries:
-                    continue
-                seen_queries.add(normalized)
                 coverage_ids = [
                     str(value) for value in item.get("coverage_ids", [])
                     if str(value) in allowed_ids
-                ] or default_coverage
+                ][:2]
+                if len(query) < 3 or not coverage_ids:
+                    continue
+                query = cls._scope_research_query(query, goal)
+                normalized = query.casefold()
+                if normalized in seen_queries:
+                    continue
+                seen_queries.add(normalized)
                 queries.append(
                     {
                         "query": query,
@@ -611,7 +668,9 @@ class LearningService:
             coverage_ids = [
                 str(value) for value in item.get("coverage_ids", [])
                 if str(value) in allowed_ids
-            ] or default_coverage
+            ]
+            if not coverage_ids:
+                continue
             seed: dict[str, object] = {
                 "title": title,
                 "url": normalized,
@@ -622,11 +681,60 @@ class LearningService:
             if kind_hint:
                 seed["kind_hint"] = kind_hint
             seeds.append(seed)
-        if not queries and not seeds:
+        mapped_ids = {
+            str(requirement_id)
+            for query in queries
+            for requirement_id in query["coverage_ids"]
+        }
+        for requirement in requirements:
+            requirement_id = str(requirement["id"])
+            if requirement_id in mapped_ids:
+                continue
+            query = cls._scope_research_query(
+                f"{requirement['question']} authoritative source worked example",
+                goal,
+            )
+            normalized = query.casefold()
+            if normalized in seen_queries:
+                query = cls._scope_research_query(
+                    f"{requirement['question']} primary documentation evidence",
+                    goal,
+                )
+                normalized = query.casefold()
+            seen_queries.add(normalized)
+            queries.append(
+                {
+                    "query": query,
+                    "purpose": f"Find teaching evidence for: {requirement['question']}"[:300],
+                    "coverage_ids": [requirement_id],
+                }
+            )
+            mapped_ids.add(requirement_id)
+        if not queries:
             if allow_fallback:
                 return cls._fallback_query_plan(goal, requirements)
             raise ValueError("ResearchQueryPlanner did not provide a usable discovery path.")
         return requirements, queries, seeds
+
+    @staticmethod
+    def _minimum_coverage_requirement_count(goal: LearningGoal) -> int:
+        """Scale breadth without making the research budget grow without bound."""
+        return min(10, max(5, goal.weeks + 2))
+
+    @staticmethod
+    def _scope_research_query(query: str, goal: LearningGoal) -> str:
+        """Keep generated searches anchored to the requested subject."""
+        compact = " ".join(query.split())
+        topic_tokens = {
+            token
+            for token in re.findall(r"[a-z0-9]+", goal.topic.casefold())
+            if len(token) >= 3
+        }
+        query_tokens = set(re.findall(r"[a-z0-9]+", compact.casefold()))
+        required_matches = min(2, len(topic_tokens))
+        if topic_tokens and len(topic_tokens.intersection(query_tokens)) < required_matches:
+            compact = f"{goal.topic} {compact}"
+        return compact[:300].rstrip()
 
     @classmethod
     def _fallback_query_plan(
@@ -634,23 +742,82 @@ class LearningService:
         goal: LearningGoal,
         requirements: list[dict[str, object]] | None = None,
     ) -> tuple[list[dict[str, object]], list[dict[str, object]], list[dict[str, object]]]:
-        requirements = requirements or [
+        if requirements is None or len(requirements) < cls._minimum_coverage_requirement_count(goal):
+            templates = [
+                (
+                    "foundations",
+                    f"What prerequisite ideas, definitions, and vocabulary are essential for understanding {goal.topic}?",
+                    "core",
+                ),
+                (
+                    "core-components",
+                    f"What are the central concepts, components, or stages of {goal.topic}?",
+                    "core",
+                ),
+                (
+                    "mechanism",
+                    f"How do the main processes, methods, or causal mechanisms in {goal.topic} work step by step?",
+                    "core",
+                ),
+                (
+                    "worked-application",
+                    f"How is {goal.topic} applied in a concrete worked example or realistic case?",
+                    "core",
+                ),
+                (
+                    "boundaries",
+                    f"What limitations, failure modes, tradeoffs, or common misconceptions constrain {goal.topic}?",
+                    "supporting",
+                ),
+                (
+                    "integration",
+                    f"How does {goal.topic} connect to its wider system, workflow, or field, and what decisions depend on it?",
+                    "core",
+                ),
+                (
+                    "implementation",
+                    f"What implementation or execution practices are needed to use {goal.topic} reliably?",
+                    "supporting",
+                ),
+                (
+                    "evaluation",
+                    f"How should results, quality, or understanding of {goal.topic} be evaluated?",
+                    "supporting",
+                ),
+                (
+                    "variants",
+                    f"Which important variants or alternative approaches to {goal.topic} should a learner compare?",
+                    "supporting",
+                ),
+                (
+                    "synthesis",
+                    f"How can a learner synthesize and independently apply the major ideas in {goal.topic}?",
+                    "supporting",
+                ),
+            ]
+            requirement_count = cls._minimum_coverage_requirement_count(goal)
+            requirements = [
+                {
+                    "id": identifier,
+                    "question": question,
+                    "priority": priority,
+                    "depth": "detailed" if goal.weeks > 1 else "overview",
+                    "evidence_policy": "single_source_ok",
+                }
+                for identifier, question, priority in templates[:requirement_count]
+            ]
+        queries = [
             {
-                "id": "core-topic",
-                "question": f"What must a {goal.level} learner understand and apply about {goal.topic}?",
-                "priority": "core",
-                "depth": "detailed" if goal.weeks > 1 else "overview",
-                "evidence_policy": "single_source_ok",
+                "query": cls._scope_research_query(
+                    f"{item['question']} authoritative documentation explanation example",
+                    goal,
+                ),
+                "purpose": f"Find teaching evidence for: {item['question']}"[:300],
+                "coverage_ids": [str(item["id"])],
             }
+            for item in requirements
         ]
-        core_id = str(next((item["id"] for item in requirements if item["priority"] == "core"), requirements[0]["id"]))
-        return requirements, [
-            {
-                "query": f"{goal.topic} authoritative guide {goal.level}",
-                "purpose": "Find authoritative evidence for the core learning objective",
-                "coverage_ids": [core_id],
-            }
-        ], []
+        return requirements, queries, []
 
     @classmethod
     def _validated_research_selections(
@@ -781,7 +948,7 @@ class LearningService:
                 evidence_policy == "single_source_ok" or len(hosts) >= 2
             )
             raw_status = raw.get("status") if isinstance(raw, dict) else None
-            if policy_met and raw_status in {None, "covered"}:
+            if raw and policy_met and raw_status == "covered":
                 status = "covered"
             elif supported_by:
                 status = "partial"
@@ -814,6 +981,10 @@ class LearningService:
                 }
             )
             next_query = " ".join(str(raw.get("next_query") or "").split())[:300]
+            if not raw and status != "covered" and len(next_query) < 3:
+                next_query = (
+                    f"{requirement['question']} authoritative evidence worked example"
+                )[:300]
             if status != "covered" and len(next_query) >= 3:
                 next_queries.append(
                     {
@@ -826,7 +997,7 @@ class LearningService:
 
     @staticmethod
     def _source_kind_hint(title: str, url: str) -> str | None:
-        """Infer only high-confidence source types; leave ambiguous pages to Gemini."""
+        """Infer only high-confidence source types; leave ambiguous pages to the agent."""
         text = f"{title} {url}".casefold()
         host = urlsplit(url).hostname or ""
         if host == "arxiv.org" or "doi.org/" in text or " paper" in text:
@@ -1015,10 +1186,27 @@ class LearningService:
 
         verified_sources = {source.url: source for source in research.sources}
         verified_urls = set(verified_sources)
+        coverage_by_id = {item.requirement_id: item for item in research.coverage}
+        if coverage_by_id:
+            cls._require_complete_research(research)
+        coverage_support = {
+            requirement_id: {
+                normalized
+                for url in item.supported_by
+                if (normalized := cls._normalize_evidence_url(url)) is not None
+            }
+            for requirement_id, item in coverage_by_id.items()
+        }
         seen_lesson_ids: set[str] = set()
+        course_coverage_ids: set[str] = set()
         grounded: list[CurriculumModule] = []
         for module in sorted(modules, key=lambda item: item.week):
             cls._validate_module_content(module, goal)
+            module_coverage_ids = cls._grounded_coverage_ids(
+                module.coverage_ids,
+                coverage_by_id,
+                f"module week {module.week}",
+            ) if coverage_by_id else []
             module_urls = cls._grounded_source_urls(
                 module.source_urls, verified_urls, f"module week {module.week}"
             )
@@ -1032,18 +1220,48 @@ class LearningService:
                     raise ValueError(f"Planner lesson id must be unique: {lesson.id}")
                 seen_lesson_ids.add(lesson.id)
                 cls._validate_lesson_content(lesson, module.week)
+                lesson_coverage_ids = cls._grounded_coverage_ids(
+                    lesson.coverage_ids,
+                    coverage_by_id,
+                    f"lesson {lesson.id}",
+                ) if coverage_by_id else []
                 paragraphs = []
                 paragraph_urls: list[str] = []
+                paragraph_coverage_ids: set[str] = set()
                 for index, paragraph in enumerate(lesson.paragraphs, start=1):
                     urls = cls._grounded_source_urls(
                         paragraph.source_urls,
                         verified_urls,
                         f"lesson {lesson.id} paragraph {index}",
                     )
+                    coverage_ids = cls._grounded_coverage_ids(
+                        paragraph.coverage_ids,
+                        coverage_by_id,
+                        f"lesson {lesson.id} paragraph {index}",
+                    ) if coverage_by_id else []
+                    if coverage_by_id and not set(coverage_ids).issubset(set(lesson_coverage_ids)):
+                        raise ValueError(
+                            f"Planner lesson {lesson.id} paragraph {index} declares coverage outside its lesson."
+                        )
+                    for requirement_id in coverage_ids:
+                        if not coverage_support[requirement_id].intersection(urls):
+                            raise ValueError(
+                                f"Planner lesson {lesson.id} paragraph {index} does not cite evidence "
+                                f"supporting coverage requirement {requirement_id}."
+                            )
+                        paragraph_coverage_ids.add(requirement_id)
                     for url in urls:
                         if url not in paragraph_urls:
                             paragraph_urls.append(url)
-                    paragraphs.append(paragraph.model_copy(update={"source_urls": urls}))
+                    paragraphs.append(
+                        paragraph.model_copy(
+                            update={"coverage_ids": coverage_ids, "source_urls": urls}
+                        )
+                    )
+                if coverage_by_id and paragraph_coverage_ids != set(lesson_coverage_ids):
+                    raise ValueError(
+                        f"Planner lesson {lesson.id} must teach every declared coverage requirement in a cited paragraph."
+                    )
                 lesson_urls = cls._grounded_source_urls(
                     lesson.source_urls or paragraph_urls,
                     verified_urls,
@@ -1056,18 +1274,56 @@ class LearningService:
                         update={
                             "content": "\n\n".join(paragraph.text.strip() for paragraph in paragraphs),
                             "paragraphs": paragraphs,
+                            "coverage_ids": lesson_coverage_ids,
                             "source_urls": lesson_urls,
                         }
                     )
                 )
+            lesson_coverage_union = {
+                requirement_id
+                for lesson in lessons
+                for requirement_id in lesson.coverage_ids
+            }
+            if coverage_by_id and lesson_coverage_union != set(module_coverage_ids):
+                raise ValueError(
+                    f"Planner module week {module.week} coverage_ids must equal the union of its lessons."
+                )
+            course_coverage_ids.update(lesson_coverage_union)
             if sum(lesson.estimated_minutes for lesson in lessons) > goal.hours_per_week * 60:
                 raise ValueError(
                     f"Planner module week {module.week} lesson time exceeds the learner's weekly-hour budget."
                 )
             grounded.append(
-                module.model_copy(update={"source_urls": module_urls, "lessons": lessons})
+                module.model_copy(
+                    update={
+                        "coverage_ids": module_coverage_ids,
+                        "source_urls": module_urls,
+                        "lessons": lessons,
+                    }
+                )
+            )
+        if coverage_by_id and course_coverage_ids != set(coverage_by_id):
+            missing = sorted(set(coverage_by_id) - course_coverage_ids)
+            raise ValueError(
+                "Planner curriculum does not cover every verified research requirement: "
+                + ", ".join(missing)
             )
         return grounded
+
+    @staticmethod
+    def _require_complete_research(research: ResearchBrief) -> None:
+        """Do not turn acknowledged evidence gaps into an apparently complete course."""
+        if not research.coverage:
+            raise ValueError("Research did not return a curriculum coverage ledger.")
+        incomplete = [
+            item.requirement_id for item in research.coverage if item.status != "covered"
+        ]
+        if research.stop_reason != "coverage_satisfied" or incomplete:
+            detail = ", ".join(incomplete) if incomplete else str(research.stop_reason)
+            raise ValueError(
+                "Research coverage is incomplete; course generation stopped before writing lessons: "
+                + detail
+            )
 
     @staticmethod
     def _provider_assessment(goal: LearningGoal, planner_output: dict) -> Assessment:
@@ -1164,6 +1420,26 @@ class LearningService:
         return normalized_urls
 
     @staticmethod
+    def _grounded_coverage_ids(
+        coverage_ids: list[str],
+        coverage_by_id: dict[str, object],
+        owner: str,
+    ) -> list[str]:
+        grounded: list[str] = []
+        for raw_id in coverage_ids:
+            requirement_id = str(raw_id)
+            coverage = coverage_by_id.get(requirement_id)
+            if coverage is None or getattr(coverage, "status", None) != "covered":
+                raise ValueError(
+                    f"Planner referenced an unverified coverage requirement in {owner}."
+                )
+            if requirement_id not in grounded:
+                grounded.append(requirement_id)
+        if not grounded:
+            raise ValueError(f"Planner must assign at least one coverage requirement to {owner}.")
+        return grounded
+
+    @staticmethod
     def _validate_lesson_content(lesson: Lesson, week: int) -> None:
         fields = {
             "title": (lesson.title, 3),
@@ -1175,15 +1451,32 @@ class LearningService:
                 raise ValueError(
                     f"Planner lesson {lesson.id or '<unknown>'} in week {week} needs complete {name}."
                 )
-        if not 4 <= len(lesson.paragraphs) <= 7:
+        if not 5 <= len(lesson.section_plan) <= 7 or any(
+            len(item.strip()) < 10 for item in lesson.section_plan
+        ):
             raise ValueError(
-                f"Planner lesson {lesson.id or '<unknown>'} in week {week} must contain 4-7 cited paragraphs."
+                f"Planner lesson {lesson.id or '<unknown>'} in week {week} needs a 5-7 item teaching section plan."
             )
+        if len(set(item.strip().casefold() for item in lesson.section_plan)) != len(lesson.section_plan):
+            raise ValueError(f"Planner lesson {lesson.id} repeats a section-plan item.")
+        if not 5 <= len(lesson.paragraphs) <= 7:
+            raise ValueError(
+                f"Planner lesson {lesson.id or '<unknown>'} in week {week} must contain 5-7 cited paragraphs."
+            )
+        if len(lesson.paragraphs) != len(lesson.section_plan):
+            raise ValueError(
+                f"Planner lesson {lesson.id or '<unknown>'} must expand every planned teaching section."
+            )
+        headings = [paragraph.heading.strip() for paragraph in lesson.paragraphs]
+        if any(len(heading) < 3 for heading in headings) or len(
+            set(heading.casefold() for heading in headings)
+        ) != len(headings):
+            raise ValueError(f"Planner lesson {lesson.id} needs distinct paragraph headings.")
         texts = [paragraph.text.strip() for paragraph in lesson.paragraphs]
         word_count = sum(len(text.split()) for text in texts)
-        if not 1000 <= word_count <= 1800:
+        if not 1200 <= word_count <= 1800:
             raise ValueError(
-                f"Planner lesson {lesson.id or '<unknown>'} in week {week} must contain 1000-1800 substantive words."
+                f"Planner lesson {lesson.id or '<unknown>'} in week {week} must contain 1200-1800 substantive words."
             )
         normalized = [re.sub(r"\s+", " ", text.casefold()) for text in texts]
         if len(set(normalized)) != len(normalized):

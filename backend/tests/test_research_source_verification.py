@@ -91,9 +91,6 @@ async def test_create_run_stops_before_planning_when_research_evidence_is_insuff
             self.added = []
             self.commits = 0
 
-        async def scalar(self, _statement):
-            return SimpleNamespace(value="codex")
-
         def add(self, record):
             self.added.append(record)
 
