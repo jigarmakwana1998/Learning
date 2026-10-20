@@ -10,6 +10,8 @@ from dataclasses import dataclass
 from typing import Any
 from urllib.parse import parse_qs, unquote, urljoin, urlsplit, urlencode
 
+import httpx
+
 from app.core.config import get_settings
 
 from .client import AgentBrowserClient, AgentBrowserError, output_text
@@ -62,6 +64,7 @@ class BrowserGateway:
         self._lock = asyncio.Lock()
         self._execution_id = uuid.uuid4().hex
         self._operation = 0
+        self._searxng_url = settings.searxng_url
         self._max_searches = max_searches if max_searches is not None else settings.research_max_searches
         self._max_pages = max_pages if max_pages is not None else settings.research_max_pages
         self._max_actions = max_actions if max_actions is not None else settings.research_max_actions
@@ -89,6 +92,20 @@ class BrowserGateway:
             await self._charge(searches=1, actions=1)
         except RuntimeError as error:
             return self._error("quota_exceeded", str(error))
+
+        if self._searxng_url:
+            try:
+                results = await self._searxng_search(query, limit)
+            except (httpx.HTTPError, ValueError):
+                results = []
+            if results:
+                return {"status": "ok", "engine": "searxng", "engines": ["searxng"], "query": query, "results": results}
+            return {
+                "status": "unavailable",
+                "error": {"code": "search_unavailable", "message": "SearXNG returned no usable results"},
+                "query": query,
+                "attempts": 1,
+            }
 
         engines = (
             ("duckduckgo", "https://html.duckduckgo.com/html/?" + urlencode({"q": query})),
@@ -173,6 +190,26 @@ class BrowserGateway:
                     }
                 )
         return {"status": "ok" if any(page["status"] == "ok" for page in pages) else "unavailable", "pages": pages}
+
+    async def _searxng_search(self, query: str, limit: int) -> list[dict[str, str]]:
+        """Query the internal SearXNG JSON API; result URLs pass the same public-URL policy."""
+        async with httpx.AsyncClient(base_url=self._searxng_url, timeout=20) as client:
+            response = await client.get("/search", params={"q": query, "format": "json"})
+            response.raise_for_status()
+        results: list[dict[str, str]] = []
+        seen: set[str] = set()
+        for item in response.json().get("results", []):
+            try:
+                normalized = await self._validate(str(item.get("url") or ""))
+            except UrlPolicyError:
+                continue
+            if normalized in seen or not _is_discovery_result(normalized, ""):
+                continue
+            seen.add(normalized)
+            results.append({"title": _clean_title(str(item.get("title") or "")), "url": normalized})
+            if len(results) >= limit:
+                break
+        return results
 
     async def _search_page(self, search_url: str, limit: int) -> list[dict[str, str]]:
         normalized = await self._validate(search_url)

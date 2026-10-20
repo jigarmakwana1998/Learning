@@ -1,6 +1,7 @@
 import asyncio
 import json
 
+import httpx
 import pytest
 
 from app.browser.client import AgentBrowserClient, AgentBrowserError
@@ -326,3 +327,30 @@ async def test_session_is_cleaned_up_after_navigation_failure():
     result = await gateway.browser_read(["https://example.com/article"])
     assert result["pages"][0]["error"]["code"] == "navigation_failed"
     assert client.closed
+
+
+@pytest.mark.asyncio
+async def test_search_uses_searxng_json_and_filters_results(monkeypatch):
+    def searxng(request):
+        assert request.url.path == "/search" and request.url.params["format"] == "json"
+        return httpx.Response(200, json={"results": [
+            {"title": "Real Python", "url": "https://realpython.com/list-comprehension-python/"},
+            {"title": "Private", "url": "https://localhost/secret"},
+            {"title": "Engine page", "url": "https://www.bing.com/search?q=x"},
+            {"title": "Real Python", "url": "https://realpython.com/list-comprehension-python/"},
+        ]})
+
+    real_client = httpx.AsyncClient
+    monkeypatch.setattr(
+        "app.browser.gateway.httpx.AsyncClient",
+        lambda **kwargs: real_client(transport=httpx.MockTransport(searxng), **kwargs),
+    )
+    browser = FakeBrowser()
+    gateway = BrowserGateway(client=browser, resolver=public_resolver)
+    gateway._searxng_url = "http://searxng:8080"
+
+    result = await gateway.browser_search("python list comprehensions", limit=5)
+
+    assert result["status"] == "ok" and result["engine"] == "searxng"
+    assert [item["url"] for item in result["results"]] == ["https://realpython.com/list-comprehension-python/"]
+    assert browser.calls == []  # search no longer drives the headless browser

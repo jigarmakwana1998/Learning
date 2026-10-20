@@ -53,9 +53,12 @@ services:
       LITELLM_API_KEY: ${LITELLM_MASTER_KEY:?Set LITELLM_MASTER_KEY in .env}
       LITELLM_MODEL: ${LITELLM_MODEL:-agent-model}
       LITELLM_LOCAL_MODEL_COST_MAP: "True"
+      SEARXNG_URL: http://searxng:8080
     depends_on:
       litellm:
         condition: service_healthy
+      searxng:
+        condition: service_started
       postgres:
         condition: service_healthy
     read_only: true
@@ -107,6 +110,26 @@ services:
     pids_limit: 150
     mem_limit: 512m
     cpus: "0.75"
+    networks: [edge, internal]
+    logging: *logging
+    restart: unless-stopped
+
+  searxng:
+    image: searxng/searxng:2026.10.19-81371861f@sha256:5ed0323b5f5f8701264ef65e239a2bd83cb57098f2b971fa30bf79c06eeae271
+    environment:
+      SEARXNG_SECRET: ${SEARXNG_SECRET:?Set SEARXNG_SECRET in .env}
+    volumes:
+      - ./infra/searxng:/etc/searxng:ro
+    read_only: true
+    tmpfs:
+      - /tmp
+      - /var/cache/searxng
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    pids_limit: 100
+    mem_limit: 256m
+    cpus: "0.5"
+    # edge for outbound queries to search engines; internal so only the API reaches it.
     networks: [edge, internal]
     logging: *logging
     restart: unless-stopped

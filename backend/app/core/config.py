@@ -65,6 +65,8 @@ class Settings(BaseModel):
     database_url: str = Field(default_factory=lambda: os.getenv("DATABASE_URL", "sqlite+aiosqlite:///./learning_coach.db"))
     encryption_key: str = Field(default_factory=lambda: required_environment("APP_ENCRYPTION_KEY"))
     cors_origins: list[str] = Field(default_factory=lambda: [origin.strip() for origin in os.getenv("CORS_ORIGINS", "http://localhost:8081,http://localhost:19006").split(",") if origin.strip()])
+    # Internal SearXNG JSON search; unset falls back to scraping public search pages.
+    searxng_url: str | None = Field(default_factory=lambda: os.getenv("SEARXNG_URL") or None)
     research_max_searches: int = Field(default_factory=lambda: int(os.getenv("RESEARCH_MAX_SEARCHES", "20")))
     research_max_pages: int = Field(default_factory=lambda: int(os.getenv("RESEARCH_MAX_PAGES", "40")))
     research_max_actions: int = Field(default_factory=lambda: int(os.getenv("RESEARCH_MAX_ACTIONS", "60")))
