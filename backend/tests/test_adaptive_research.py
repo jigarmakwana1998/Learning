@@ -5,7 +5,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from app.models.database import AgentSessionRecord
+from app.mcp.audit import new_session
 from app.schemas.learning import LearningGoal
 from app.services.learning_service import LearningService
 
@@ -179,14 +179,8 @@ class AdaptiveHarness:
         persisted_prompt: str | None = None,
     ):
         execution = await GapRuntime(role).execute(prompt)
-        session = AgentSessionRecord(
-            agent_run_id=run_id,
-            agent_name=role,
-            harness=self.harness,
-            status="completed",
-            output_payload=execution.payload,
-            input_payload={"prompt": persisted_prompt},
-        )
+        session = new_session(run_id, role, {"prompt": persisted_prompt})
+        session.status, session.output_payload = "completed", execution.payload
         self.db.add(session)
         await self.db.flush()
         return session, execution.payload

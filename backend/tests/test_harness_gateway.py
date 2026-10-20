@@ -50,7 +50,7 @@ async def test_litellm_spend_log_becomes_a_model_timeline_event(monkeypatch):
     monkeypatch.setattr(harness_runtime_module, "record_trace_event", capture_event)
     harness = AgentHarness.__new__(AgentHarness)
     harness.db = object()
-    session = type("Session", (), {"id": "session-1", "agent_run_id": "run-1"})()
+    session = type("Session", (), {"id": "session-1", "run_id": "run-1"})()
     await harness._record_model_events(
         session,
         [

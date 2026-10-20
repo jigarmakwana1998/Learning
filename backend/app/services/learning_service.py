@@ -17,11 +17,8 @@ from app.browser.gateway import BrowserGateway
 from app.core.config import get_settings
 from app.core.security import encrypt
 from app.harness import AgentHarness
-from app.mcp.audit import record_tool_invocation, record_trace_event
-from app.models.database import (
-    AgentRun, AgentSessionRecord, AssignmentSubmissionRecord, LearningRequest,
-    LessonProgressRecord, QuizSubmissionRecord, TranscriptEntryRecord, User,
-)
+from app.mcp.audit import new_session, record_trace_event
+from app.models.database import AgentEvent, AgentRun, Attempt, LessonProgressRecord, User
 from app.schemas.learning import (
     Assessment, AssignmentSubmissionResponse, Course, CurriculumModule,
     LearningGoal, LearningProgressResponse, LearningRun, LearningRunRequest, Lesson,
@@ -36,10 +33,7 @@ class LearningService:
     async def create_run(self, db: AsyncSession, user: User, request: LearningRunRequest) -> LearningRun:
         harness_name = "deep-agents"
         goal = LearningGoal.model_validate(request)
-        learning_request = LearningRequest(user_id=user.id, topic=goal.topic, level=goal.level, hours_per_week=goal.hours_per_week, weeks=goal.weeks)
-        db.add(learning_request)
-        await db.flush()
-        run = AgentRun(learning_request_id=learning_request.id, harness=harness_name)
+        run = AgentRun(user_id=user.id, topic=goal.topic, level=goal.level, hours_per_week=goal.hours_per_week, weeks=goal.weeks, harness=harness_name)
         db.add(run)
         await db.flush()
         harness = AgentHarness(harness_name, db)
@@ -188,16 +182,11 @@ class LearningService:
         run_id: str,
         harness: str,
         goal: LearningGoal,
-    ) -> tuple[AgentSessionRecord, ResearchBrief]:
+    ) -> tuple[AgentEvent, ResearchBrief]:
         """Browse until semantic coverage is complete or a safety boundary is reached."""
         gateway = self.browser_gateway_factory()
         settings = get_settings()
-        audit_session = AgentSessionRecord(
-            agent_run_id=run_id,
-            agent_name="BrowserResearch",
-            harness=harness,
-            input_payload={"agent": "Researcher", "pipeline": "browser-research"},
-        )
+        audit_session = new_session(run_id, "BrowserResearch", {"agent": "Researcher", "pipeline": "browser-research"})
         db.add(audit_session)
         await db.flush()
         await record_trace_event(
@@ -256,7 +245,7 @@ class LearningService:
             synthesis = ResearchSynthesisAgent()
             evaluator = ResearchCoverageEvaluatorAgent()
             selector = ResearchSelectorAgent()
-            synthesis_sessions: list[AgentSessionRecord] = []
+            synthesis_sessions: list[AgentEvent] = []
             coverage = self._default_coverage(requirements)
             searches = pages_attempted = pages_read = rounds = 0
             stop_reason = "no_new_evidence"
@@ -496,14 +485,17 @@ class LearningService:
                 "query_planner_session_id": query_session.id,
                 "synthesis_session_ids": [session.id for session in synthesis_sessions],
             }
-            self._add_transcript_entry(
+            await record_trace_event(
                 db,
-                audit_session.id,
-                "system",
-                f"Adaptive research stopped with {stop_reason} after {searches} searches, "
-                f"{pages_read} readable pages, and {len(research.sources)} grounded sources. "
-                "Page bodies are not persisted.",
-                1,
+                run_id=run_id,
+                session_id=audit_session.id,
+                event_type="message",
+                name="system",
+                content=encrypt(
+                    f"Adaptive research stopped with {stop_reason} after {searches} searches, "
+                    f"{pages_read} readable pages, and {len(research.sources)} grounded sources. "
+                    "Page bodies are not persisted."
+                ),
             )
             await record_trace_event(
                 db,
@@ -543,7 +535,7 @@ class LearningService:
         harness: str,
         role: str,
         prompt: str,
-    ) -> tuple[AgentSessionRecord, dict]:
+    ) -> tuple[AgentEvent, dict]:
         """Run research through the traced harness without persisting page bodies."""
         redacted_inputs = {
             "ResearchQueryPlanner": "Planned semantic coverage requirements and optional discovery paths.",
@@ -1014,23 +1006,6 @@ class LearningService:
             return "lecture"
         return None
 
-    @staticmethod
-    def _add_transcript_entry(
-        db: AsyncSession,
-        session_id: str,
-        role: str,
-        content: str,
-        sequence: int,
-    ) -> None:
-        db.add(
-            TranscriptEntryRecord(
-                session_id=session_id,
-                sequence=sequence,
-                role=role,
-                encrypted_content=encrypt(content),
-            )
-        )
-
     @classmethod
     async def _audit_browser_call(
         cls,
@@ -1064,7 +1039,7 @@ class LearningService:
                     }
                 )
         domains = sorted({urlsplit(url).hostname for url in urls if urlsplit(url).hostname})
-        status = "success" if result.get("status") == "ok" else "failed"
+        status = "completed" if result.get("status") == "ok" else "failed"
         error_payload = result.get("error") if isinstance(result.get("error"), dict) else {}
         metadata = {
             "query": str(result.get("query") or "")[:500] if tool_name == "browser_search" else None,
@@ -1076,30 +1051,21 @@ class LearningService:
             "page_results": page_results,
             "pipeline": "browser-research",
         }
-        invocation = await record_tool_invocation(
-            db,
-            session_id,
-            tool_name,
-            status,
-            metadata,
-            str(error_payload.get("code") or "Browser operation unavailable") if status == "failed" else None,
-            started_at=started_at,
-        )
         await record_trace_event(
             db,
             run_id=run_id,
             session_id=session_id,
             event_type="tool",
             name=tool_name,
-            status="completed" if status == "success" else "failed",
+            status=status,
             input_payload={
                 "query": metadata["query"],
                 "purpose": metadata["purpose"],
             } if tool_name == "browser_search" else {"urls": urls[:20]},
             output_payload={"result_count": len(items), "success_count": success_count},
             metadata=metadata,
-            error=invocation.error_message,
-            duration_ms=invocation.duration_ms,
+            error=str(error_payload.get("code") or "Browser operation unavailable") if status == "failed" else None,
+            duration_ms=int((perf_counter() - started_at) * 1000),
         )
 
     @classmethod
@@ -1548,7 +1514,7 @@ class LearningService:
         return hostname in {"google.com", "www.google.com"} and parsed.path.casefold().startswith("/search")
 
     async def owned_run(self, db: AsyncSession, user: User, run_id: str) -> AgentRun | None:
-        return await db.scalar(select(AgentRun).join(LearningRequest).where(AgentRun.id == run_id, LearningRequest.user_id == user.id))
+        return await db.scalar(select(AgentRun).where(AgentRun.id == run_id, AgentRun.user_id == user.id))
 
     @staticmethod
     def learning_run(run: AgentRun) -> LearningRun:
@@ -1581,9 +1547,9 @@ class LearningService:
         ]
         correct_count = sum(item.correct for item in feedback)
         score = round(correct_count * 100 / len(questions)) if questions else 0
-        record = QuizSubmissionRecord(
-            agent_run_id=run.id, user_id=user.id, answers=supplied, score_percent=score,
-            feedback=[item.model_dump(mode="json") for item in feedback],
+        record = Attempt(
+            agent_run_id=run.id, user_id=user.id, kind="quiz", answers=supplied, status="evaluated",
+            score=score / 100, feedback=[item.model_dump(mode="json") for item in feedback], evaluated_at=datetime.now(timezone.utc),
         )
         db.add(record)
         await db.commit()
@@ -1600,7 +1566,7 @@ class LearningService:
             f"To strengthen it, make sure it includes: {expected[0].lower()}.",
             "Add a concrete observation or artifact that lets another learner verify your result.",
         ]
-        record = AssignmentSubmissionRecord(agent_run_id=run.id, user_id=user.id, kind=kind, content=content, status=status, feedback=feedback)
+        record = Attempt(agent_run_id=run.id, user_id=user.id, kind=kind, content=content, status=status, feedback=feedback, evaluated_at=datetime.now(timezone.utc))
         db.add(record)
         await db.commit()
         await db.refresh(record)

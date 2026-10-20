@@ -9,6 +9,7 @@ from cryptography.fernet import Fernet
 from dotenv import dotenv_values
 
 test_database = Path(tempfile.gettempdir()) / "learning_coach_test.db"
+test_database.unlink(missing_ok=True)  # create_all never migrates a stale schema
 
 # Captured before the fake values below replace them; the live contract tests
 # in test_supabase_live.py run against this real project.

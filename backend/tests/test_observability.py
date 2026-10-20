@@ -5,7 +5,8 @@ from sqlalchemy import select
 
 from app.core.database import SessionLocal
 from app.main import app
-from app.models.database import AgentRun, AgentSessionRecord, AgentTraceEvent, LearningRequest, User
+from app.mcp.audit import new_session
+from app.models.database import AgentEvent, AgentRun, User
 
 
 def _auth(client: TestClient) -> dict[str, str]:
@@ -19,24 +20,17 @@ def _auth(client: TestClient) -> dict[str, str]:
 async def _seed_trace() -> str:
     async with SessionLocal() as db:
         user = await db.scalar(select(User).where(User.email == "trace@example.com"))
-        request = LearningRequest(user_id=user.id, topic="Tracing", level="beginner", weeks=2, hours_per_week=4)
-        db.add(request)
-        await db.flush()
-        run = AgentRun(learning_request_id=request.id, harness="deep-agents", status="completed")
+        run = AgentRun(user_id=user.id, topic="Tracing", level="beginner", weeks=2, hours_per_week=4, harness="deep-agents", status="completed")
         db.add(run)
         await db.flush()
 
         for agent_name in ("researcher", "planner", "assessment"):
-            session = AgentSessionRecord(
-                agent_run_id=run.id,
-                agent_name=agent_name,
-                harness="deep-agents",
-                status="completed",
-            )
+            session = new_session(run.id, agent_name)
+            session.status = "completed"
             db.add(session)
             await db.flush()
             db.add_all([
-                AgentTraceEvent(
+                AgentEvent(
                     run_id=run.id,
                     session_id=session.id,
                     sequence=1,
@@ -44,7 +38,7 @@ async def _seed_trace() -> str:
                     name="harness.request",
                     input_payload={"prompt": agent_name},
                 ),
-                AgentTraceEvent(
+                AgentEvent(
                     run_id=run.id,
                     session_id=session.id,
                     sequence=2,

@@ -5,10 +5,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.database import get_db
 from app.core.dependencies import get_current_user
 from app.core.security import decrypt
-from app.models.database import (
-    AgentRun, AgentSessionRecord, LearningRequest, McpToolInvocation,
-    TranscriptEntryRecord, User,
-)
+from app.models.database import AgentEvent, AgentRun, User
 from app.schemas.learning import (
     AssignmentSubmissionResponse, EvaluationRequest, EvaluationResponse, LearningProgressRequest,
     LearningProgressResponse, LearningRun, LearningRunRequest, QuizSubmissionRequest,
@@ -31,8 +28,8 @@ async def create_learning_run(request: LearningRunRequest, db: AsyncSession = De
 
 @router.get("")
 async def list_learning_runs(db: AsyncSession = Depends(get_db), user: User = Depends(get_current_user)) -> list[dict]:
-    rows = (await db.execute(select(AgentRun, LearningRequest).join(LearningRequest, AgentRun.learning_request_id == LearningRequest.id).where(LearningRequest.user_id == user.id).order_by(AgentRun.started_at.desc()))).all()
-    return [{"id": run.id, "topic": request.topic, "harness": run.harness, "status": run.status, "created_at": run.started_at} for run, request in rows]
+    runs = (await db.scalars(select(AgentRun).where(AgentRun.user_id == user.id).order_by(AgentRun.started_at.desc()))).all()
+    return [{"id": run.id, "topic": run.topic, "harness": run.harness, "status": run.status, "created_at": run.started_at} for run in runs]
 
 
 async def _owned_run_or_404(run_id: str, db: AsyncSession, user: User) -> AgentRun:
@@ -48,60 +45,48 @@ async def get_learning_run_trace(
     db: AsyncSession = Depends(get_db),
     user: User = Depends(get_current_user),
 ) -> LearningRunTraceResponse:
-    await _owned_run_or_404(run_id, db, user)
-    sessions = (
+    run = await _owned_run_or_404(run_id, db, user)
+    events = (
         await db.scalars(
-            select(AgentSessionRecord)
-            .where(AgentSessionRecord.agent_run_id == run_id)
-            .order_by(AgentSessionRecord.started_at, AgentSessionRecord.id)
+            select(AgentEvent)
+            .where(AgentEvent.run_id == run_id, AgentEvent.event_type.in_(("session", "message", "tool")))
+            .order_by(AgentEvent.created_at, AgentEvent.sequence, AgentEvent.id)
         )
     ).all()
-    items: list[RunTraceSessionResponse] = []
-    for session in sessions:
-        transcript = (
-            await db.scalars(
-                select(TranscriptEntryRecord)
-                .where(TranscriptEntryRecord.session_id == session.id)
-                .order_by(TranscriptEntryRecord.sequence, TranscriptEntryRecord.created_at)
-            )
-        ).all()
-        tools = (
-            await db.scalars(
-                select(McpToolInvocation)
-                .where(McpToolInvocation.session_id == session.id)
-                .order_by(McpToolInvocation.created_at, McpToolInvocation.id)
-            )
-        ).all()
-        items.append(
-            RunTraceSessionResponse(
-                id=session.id,
-                run_id=run_id,
-                agent_name=session.agent_name,
-                harness=session.harness,
-                status=session.status,
-                created_at=session.started_at,
-                duration_ms=session.duration_ms,
-                transcript=[
-                    TranscriptEntryResponse(
-                        role=entry.role,
-                        content=decrypt(entry.encrypted_content),
-                        created_at=entry.created_at,
-                    )
-                    for entry in transcript
-                ],
-                tool_invocations=[
-                    ToolInvocationResponse(
-                        tool_name=tool.tool_name,
-                        status=tool.status,
-                        duration_ms=tool.duration_ms,
-                        metadata=tool.metadata_json,
-                        error=tool.error_message,
-                        created_at=tool.created_at,
-                    )
-                    for tool in tools
-                ],
-            )
+    by_session: dict[str, list[AgentEvent]] = {}
+    for event in events:
+        if event.session_id:
+            by_session.setdefault(event.session_id, []).append(event)
+    items = [
+        RunTraceSessionResponse(
+            id=session.id,
+            run_id=run_id,
+            agent_name=session.name,
+            harness=run.harness,
+            status=session.status,
+            created_at=session.created_at,
+            duration_ms=session.duration_ms,
+            transcript=[
+                TranscriptEntryResponse(role=event.name, content=decrypt(event.content), created_at=event.created_at)
+                for event in sorted(by_session.get(session.id, []), key=lambda event: event.sequence)
+                if event.event_type == "message"
+            ],
+            tool_invocations=[
+                ToolInvocationResponse(
+                    tool_name=event.name,
+                    status=event.status,
+                    duration_ms=event.duration_ms,
+                    metadata=event.metadata_json,
+                    error=event.error_message,
+                    created_at=event.created_at,
+                )
+                for event in by_session.get(session.id, [])
+                if event.event_type == "tool"
+            ],
         )
+        for session in events
+        if session.event_type == "session"
+    ]
     return LearningRunTraceResponse(run_id=run_id, sessions=items)
 
 

@@ -5,7 +5,8 @@ from types import SimpleNamespace
 
 import pytest
 
-from app.models.database import AgentSessionRecord, McpToolInvocation
+from app.mcp.audit import new_session
+from app.models.database import AgentEvent
 from app.schemas.learning import LearningGoal
 from app.services.learning_service import LearningService
 
@@ -173,14 +174,8 @@ async def test_browser_research_is_bounded_grounded_and_body_free_in_audit(monke
             persisted_prompt: str | None = None,
         ):
             execution = await FakePlainRuntime(role, calls).execute(prompt)
-            session = AgentSessionRecord(
-                agent_run_id=run_id,
-                agent_name=role,
-                harness=self.harness,
-                status="completed",
-                    output_payload=execution.payload,
-                    input_payload={"prompt": persisted_prompt},
-            )
+            session = new_session(run_id, role, {"prompt": persisted_prompt})
+            session.status, session.output_payload = "completed", execution.payload
             self.db.add(session)
             await self.db.flush()
             return session, execution.payload
@@ -200,7 +195,7 @@ async def test_browser_research_is_bounded_grounded_and_body_free_in_audit(monke
         LearningGoal(topic="Transformers", weeks=2),
     )
 
-    assert session.agent_name == "ResearchSynthesisPart1"
+    assert session.name == "ResearchSynthesisPart1"
     assert calls == [
         "ResearchQueryPlanner", "ResearchSelector",
         "ResearchSynthesisPart1", "ResearchCoverageRound1",
@@ -211,19 +206,19 @@ async def test_browser_research_is_bounded_grounded_and_body_free_in_audit(monke
     assert research.stop_reason == "coverage_satisfied"
     assert [item.status for item in research.coverage] == ["covered"] * 5
 
-    audits = [item for item in db.added if isinstance(item, McpToolInvocation)]
-    assert [item.tool_name for item in audits] == [
+    audits = [item for item in db.added if isinstance(item, AgentEvent) and item.event_type == "tool"]
+    assert [item.name for item in audits] == [
         "browser_read"
     ]
     assert all("content" not in json.dumps(item.metadata_json).casefold() for item in audits)
     assert all("UNTRUSTED_PAGE_BODY" not in json.dumps(item.metadata_json) for item in audits)
     browser_session = next(
         item for item in db.added
-        if isinstance(item, AgentSessionRecord) and item.agent_name == "BrowserResearch"
+        if isinstance(item, AgentEvent) and item.event_type == "session" and item.name == "BrowserResearch"
     )
     assert browser_session.status == "completed"
     assert browser_session.output_payload["read_count"] == 1
-    persisted_sessions = [item for item in db.added if isinstance(item, AgentSessionRecord)]
+    persisted_sessions = [item for item in db.added if isinstance(item, AgentEvent) and item.event_type == "session"]
     assert all(
         "UNTRUSTED_PAGE_BODY" not in json.dumps(
             {"input": item.input_payload, "output": item.output_payload}

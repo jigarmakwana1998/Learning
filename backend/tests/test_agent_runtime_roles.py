@@ -142,15 +142,14 @@ async def test_harness_persists_sanitized_tools_but_not_internal_evidence(monkey
 
     session = SimpleNamespace(
         id="session-id",
-        agent_run_id="run-id",
-        agent_name="Researcher",
+        run_id="run-id",
+        name="Researcher",
         status="active",
         output_payload=None,
         error_message=None,
         completed_at=None,
         duration_ms=None,
     )
-    audit_calls = []
     appended = []
     trace_calls = []
 
@@ -160,15 +159,11 @@ async def test_harness_persists_sanitized_tools_but_not_internal_evidence(monkey
     async def append(*args):
         appended.append(args)
 
-    async def audit(*args, **kwargs):
-        audit_calls.append((args, kwargs))
-
     async def trace(*args, **kwargs):
         trace_calls.append((args, kwargs))
 
     monkeypatch.setattr(runtime_module, "DeepAgentRuntime", lambda: Runtime())
     monkeypatch.setattr(runtime_module, "LiteLLMGateway", Gateway)
-    monkeypatch.setattr(runtime_module, "record_tool_invocation", audit)
     monkeypatch.setattr(runtime_module, "record_trace_event", trace)
     harness = AgentHarness("deep-agents", Db())
     monkeypatch.setattr(harness, "get", get)
@@ -184,8 +179,9 @@ async def test_harness_persists_sanitized_tools_but_not_internal_evidence(monkey
     assert result.visited_urls == frozenset({"https://example.com/paper"})
     assert session.output_payload == {"topic": "Attention", "sources": []}
     assert "visited_urls" not in session.output_payload
-    assert audit_calls[0][0][2:5] == ("browser_read", "success", tool_event.metadata)
-    assert audit_calls[0][1]["duration_ms"] == 25
+    tool_call = next(call[1] for call in trace_calls if call[1]["event_type"] == "tool")
+    assert (tool_call["name"], tool_call["status"], tool_call["metadata"]) == ("browser_read", "completed", tool_event.metadata)
+    assert tool_call["duration_ms"] == 25
     assert appended[0][2] == "Ephemeral research evidence omitted."
     assert "UNTRUSTED_PAGE_BODY" not in json.dumps(trace_calls, default=str)
     assert any(

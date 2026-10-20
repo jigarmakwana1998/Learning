@@ -1,13 +1,9 @@
-import logging
 from datetime import datetime
-from time import perf_counter
 
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.models.database import AgentTraceEvent, McpToolInvocation
-
-logger = logging.getLogger(__name__)
+from app.models.database import AgentEvent
 
 
 async def record_trace_event(
@@ -15,14 +11,11 @@ async def record_trace_event(
     status: str = "completed", input_payload: dict | None = None, output_payload: dict | None = None,
     metadata: dict | None = None, error: str | None = None, duration_ms: int | None = None,
     prompt_tokens: int | None = None, completion_tokens: int | None = None, total_cost_usd: float | None = None,
-    created_at: datetime | None = None,
-) -> AgentTraceEvent:
-    logger.info(
-        "trace run=%s session=%s %s.%s status=%s duration_ms=%s error=%.300s",
-        run_id, session_id, event_type, name, status, duration_ms, error or "",
-    )
-    sequence = (await db.scalar(select(func.coalesce(func.max(AgentTraceEvent.sequence), 0)).where(AgentTraceEvent.session_id == session_id))) + 1
-    event = AgentTraceEvent(run_id=run_id, session_id=session_id, sequence=sequence, event_type=event_type, name=name, status=status, input_payload=input_payload, output_payload=output_payload, metadata_json=metadata, error_message=error, duration_ms=duration_ms, prompt_tokens=prompt_tokens, completion_tokens=completion_tokens, total_cost_usd=total_cost_usd)
+    content: str | None = None, created_at: datetime | None = None,
+) -> AgentEvent:
+    """Single writer for every session event: transcript messages, tool calls, model calls, lifecycle."""
+    sequence = ((await db.scalar(select(func.coalesce(func.max(AgentEvent.sequence), 0)).where(AgentEvent.session_id == session_id))) or 0) + 1
+    event = AgentEvent(run_id=run_id, session_id=session_id, sequence=sequence, event_type=event_type, name=name, status=status, input_payload=input_payload, output_payload=output_payload, metadata_json=metadata, content=content, error_message=error, duration_ms=duration_ms, prompt_tokens=prompt_tokens, completion_tokens=completion_tokens, total_cost_usd=total_cost_usd)
     if created_at is not None:
         event.created_at = created_at
     db.add(event)
@@ -30,14 +23,5 @@ async def record_trace_event(
     return event
 
 
-async def record_tool_invocation(db: AsyncSession, session_id: str, tool_name: str, status: str, metadata: dict | None = None, error: str | None = None, started_at: float | None = None, duration_ms: int | None = None) -> McpToolInvocation:
-    if duration_ms is None and started_at is not None:
-        duration_ms = int((perf_counter() - started_at) * 1000)
-    logger.info(
-        "mcp.tool session=%s %s status=%s duration_ms=%s error=%.300s metadata=%.300s",
-        session_id, tool_name, status, duration_ms, error or "", metadata,
-    )
-    invocation = McpToolInvocation(session_id=session_id, tool_name=tool_name, status=status, metadata_json=metadata, error_message=error, duration_ms=duration_ms)
-    db.add(invocation)
-    await db.flush()
-    return invocation
+def new_session(run_id: str, agent_name: str, input_payload: dict | None = None) -> AgentEvent:
+    return AgentEvent(run_id=run_id, event_type="session", name=agent_name, status="active", input_payload=input_payload)
