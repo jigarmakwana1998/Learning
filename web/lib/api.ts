@@ -32,7 +32,7 @@ export type QuizQuestion = {
 };
 export type QuizResult = { scorePercent?: number; feedback: string; passed?: boolean; recommendation?: string };
 export type SubmissionResult = { submissionId?: string; feedback: string; scorePercent?: number; status?: string; recommendation?: string };
-export type AgentHarness = "codex" | "gemini-cli" | "antigravity-cli";
+export type AgentHarness = "deep-agents";
 type ApiQuizQuestion = { id: string; prompt: string; type?: QuizQuestion["type"]; options?: string[]; choices?: string[]; explanation?: string };
 type AssignmentPrompt = { title?: string; prompt: string; deliverables?: string[]; rubric?: string[] };
 
@@ -47,7 +47,7 @@ export type LearningRun = {
   sessions: Record<string, string>;
 };
 
-type ApiLessonParagraph = { text: string; source_urls: string[] };
+type ApiLessonParagraph = { heading?: string; text: string; coverage_ids?: string[]; source_urls: string[] };
 type ApiLesson = { id?: string; title?: string; summary?: string; objective?: string; practice?: string; estimated_minutes?: number; estimatedMinutes?: number; outcomes?: string[]; content?: LessonContent[] | string; paragraphs?: ApiLessonParagraph[]; source_urls?: string[]; sourceUrls?: string[]; completed?: boolean };
 type ApiModule = { id?: string; week: number; title: string; outcomes?: string[]; source_urls?: string[]; lessons?: ApiLesson[] };
 
@@ -62,11 +62,14 @@ export function courseModules(run: LearningRun): CourseModule[] {
       return {
         id: lesson.id ?? `module-${moduleIndex + 1}-lesson-${lessonIndex + 1}`,
         title: lesson.title ?? `${module.title}: core concepts`,
-        summary: lesson.summary,
+        summary: lesson.summary ?? lesson.objective,
         estimatedMinutes: lesson.estimated_minutes ?? lesson.estimatedMinutes ?? 30,
         outcomes: lessonOutcomes,
         content: lesson.paragraphs?.length
-          ? lesson.paragraphs.map((paragraph) => ({ body: paragraph.text, sourceUrls: paragraph.source_urls, type: "concept" as const }))
+          ? [
+              ...lesson.paragraphs.map((paragraph) => ({ heading: paragraph.heading, body: paragraph.text, sourceUrls: paragraph.source_urls, type: "concept" as const })),
+              ...(lesson.practice ? [{ heading: "Practice", body: lesson.practice, type: "practice" as const }] : []),
+            ]
           : typeof lesson.content === "string" ? [{ heading: lesson.objective ?? "Study guide", body: lesson.content, type: "concept" as const }, ...(lesson.practice ? [{ heading: "Practice", body: lesson.practice, type: "practice" as const }] : [])] : lesson.content?.length ? lesson.content : [{ heading: "What to focus on", body: "Work through the outcomes below. Use the linked course sources to deepen your understanding, then complete the knowledge check.", bullets: lessonOutcomes, type: "concept" as const }],
         sourceUrls: lesson.source_urls ?? lesson.sourceUrls ?? sourceUrls,
         completed: lesson.completed,

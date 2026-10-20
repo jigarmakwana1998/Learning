@@ -4,8 +4,12 @@
 model_list:
   - model_name: agent-model
     litellm_params:
-      model: openai/gpt-4o-mini
-      api_key: os.environ/OPENAI_API_KEY
+      model: openai/z-ai/glm-5.3-flash
+      api_base: https://integrate.api.nvidia.com/v1
+      api_key: os.environ/NVIDIA_API_KEY
+    model_info:
+      max_input_tokens: 1048576
+      supports_function_calling: true
 
 litellm_settings:
   json_logs: true

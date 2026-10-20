@@ -1,113 +1,124 @@
 import json
-from pathlib import Path
 from types import SimpleNamespace
+from uuid import uuid4
 
 import pytest
 
+import app.harness.deep_agents as deep_agents_module
 import app.harness.runtime as runtime_module
-from app.harness.providers.cli import ProviderExecution, ToolInvocationEvent
-from app.harness.providers.factory import get_runtime
+from app.agents.contracts import PlannerOutput, output_schema_for
+from app.core.config import Settings
+from app.harness.deep_agents import (
+    AgentEventCollector,
+    DeepAgentExecution,
+    DeepAgentRuntime,
+    ToolInvocationEvent,
+)
 from app.harness.runtime import AgentHarness
 
 
-def test_researcher_gemini_enables_only_learning_browser(monkeypatch):
-    monkeypatch.delenv("GEMINI_CLI_COMMAND", raising=False)
-    monkeypatch.delenv("GEMINI_MODEL", raising=False)
-
-    runtime = get_runtime("gemini-cli", "Researcher")
-
-    assert runtime.stream_json is True
-    assert runtime.command[runtime.command.index("--model") + 1] == "agent-model"
-    assert "stream-json" in runtime.command
-    assert runtime.command[runtime.command.index("--allowed-mcp-server-names") + 1] == "learning-browser"
-    assert runtime.command[runtime.command.index("--allowed-tools") + 1] == (
-        "mcp_learning-browser_browser_search,mcp_learning-browser_browser_read"
-    )
-    assert runtime.timeout_seconds == 300
-    assert runtime.working_directory is not None
-    assert (Path(runtime.working_directory) / ".gemini" / "settings.json").is_file()
-
-
-def test_gemini_prefers_pinned_project_local_entrypoint(monkeypatch):
-    monkeypatch.delenv("GEMINI_CLI_COMMAND", raising=False)
-    import app.harness.providers.cli as cli_module
-
-    original_is_file = cli_module.Path.is_file
-
-    def is_file(path):
-        return str(path).replace("\\", "/").endswith(
-            "node_modules/@google/gemini-cli/bundle/gemini.js"
-        ) or original_is_file(path)
-
-    monkeypatch.setattr(cli_module.Path, "is_file", is_file)
-    monkeypatch.setattr(cli_module.shutil, "which", lambda name, **_kwargs: "/runtime/node" if name == "node" else None)
-
-    runtime = get_runtime("gemini-cli", "Researcher")
-
-    assert runtime.command[0] == "/runtime/node"
-    assert runtime.command[1].replace("\\", "/").endswith(
-        "node_modules/@google/gemini-cli/bundle/gemini.js"
+def test_deep_agent_routes_model_through_litellm_and_maps_medium_reasoning():
+    settings = Settings(
+        agent_reasoning_effort="medium",
+        litellm_base_url="http://litellm:4000",
+        litellm_model="agent-model",
     )
 
+    model = DeepAgentRuntime(settings)._model("session-key", {"session_id": "session-1"})
 
-def test_non_researcher_gemini_disables_browser_and_uses_json(monkeypatch):
-    monkeypatch.delenv("GEMINI_CLI_COMMAND", raising=False)
-
-    for role in ("Planner", "Examiner", None):
-        runtime = get_runtime("gemini-cli", role)
-        assert runtime.stream_json is False
-        assert "stream-json" not in runtime.command
-        assert "json" in runtime.command
-        assert runtime.command[runtime.command.index("--allowed-mcp-server-names") + 1] == "browser-disabled"
-        assert "--allowed-tools" not in runtime.command
-        assert runtime.timeout_seconds == 300
+    assert model.model == "litellm_proxy/agent-model"
+    assert model.api_base == "http://litellm:4000"
+    assert model.api_key == "session-key"
+    assert model.model_kwargs["reasoning_effort"] == "high"
+    assert model.model_kwargs["extra_body"]["chat_template_kwargs"]["clear_thinking"] is True
+    assert json.loads(model.extra_headers["x-litellm-spend-logs-metadata"]) == {
+        "session_id": "session-1"
+    }
 
 
-def test_other_harness_commands_target_litellm(monkeypatch):
-    monkeypatch.delenv("CODEX_COMMAND", raising=False)
-    monkeypatch.delenv("ANTIGRAVITY_CLI_COMMAND", raising=False)
+def test_every_workflow_role_has_a_structured_output_contract():
+    assert output_schema_for("Planner") is PlannerOutput
+    assert output_schema_for("LessonWriter") is not None
+    assert output_schema_for("ResearchQueryPlanner") is not None
+    assert output_schema_for("ResearchSelector") is not None
+    assert output_schema_for("ResearchSynthesisPart3") is not None
+    assert output_schema_for("ResearchCoverageRound3") is not None
 
-    codex = get_runtime("codex", "Researcher").command
-    assert codex[:3] == ["codex", "exec", "--json"]
-    assert 'model_provider="litellm"' in codex
-    assert "agent-model" in codex
-    assert get_runtime("antigravity-cli", "Researcher").command == [
-        "agy", "--print", "--model", "agent-model", "--output-format", "stream-json",
+
+@pytest.mark.asyncio
+async def test_mcp_tools_are_scoped_to_configured_roles(monkeypatch):
+    captured = []
+
+    class Client:
+        def __init__(self, connections, **kwargs):
+            captured.append((connections, kwargs))
+
+        async def get_tools(self):
+            return ["browser-tool"]
+
+    monkeypatch.setattr(deep_agents_module, "MultiServerMCPClient", Client)
+    settings = Settings(
+        agent_mcp_enabled=True,
+        agent_mcp_roles={"Researcher"},
+        mcp_servers={"browser": {"transport": "http", "url": "http://mcp.test"}},
+    )
+    runtime = DeepAgentRuntime(settings)
+
+    assert await runtime._mcp_tools("Planner") == []
+    assert await runtime._mcp_tools("Researcher") == ["browser-tool"]
+    assert captured == [
+        (
+            {"browser": {"transport": "http", "url": "http://mcp.test"}},
+            {"tool_name_prefix": True},
+        )
     ]
 
 
-def test_gemini_command_override_cannot_omit_role_safety_flags(monkeypatch):
-    monkeypatch.setenv("GEMINI_CLI_COMMAND", "custom-gemini --model fast")
-    monkeypatch.setenv("GEMINI_MODEL", "gemini-2.5-flash")
-
-    runtime = get_runtime("gemini-cli", "Researcher")
-
-    assert runtime.command[:3] == ["custom-gemini", "--model", "fast"]
-    model_flags = [index for index, value in enumerate(runtime.command) if value == "--model"]
-    assert runtime.command[model_flags[-1] + 1] == "agent-model"
-    assert runtime.command[runtime.command.index("--allowed-mcp-server-names") + 1] == "learning-browser"
-    assert runtime.command[runtime.command.index("--allowed-tools") + 1] == (
-        "mcp_learning-browser_browser_search,mcp_learning-browser_browser_read"
+@pytest.mark.asyncio
+async def test_tool_collector_redacts_browser_content_and_keeps_visit_evidence():
+    collector = AgentEventCollector()
+    run_id = uuid4()
+    await collector.on_tool_start(
+        {"name": "browser_read"},
+        "ignored",
+        run_id=run_id,
+        inputs={"urls": ["https://example.com/paper"]},
+    )
+    await collector.on_tool_end(
+        {
+            "content": json.dumps(
+                {
+                    "pages": [
+                        {
+                            "url": "https://example.com/paper",
+                            "title": "Paper",
+                            "status": "ok",
+                            "content": "UNTRUSTED_PAGE_BODY",
+                        }
+                    ]
+                }
+            )
+        },
+        run_id=run_id,
     )
 
-
-def test_gemini_provider_model_env_cannot_bypass_litellm_alias(monkeypatch):
-    monkeypatch.delenv("GEMINI_CLI_COMMAND", raising=False)
-    monkeypatch.setenv("GEMINI_MODEL", "gemini-3-flash-preview")
-
-    runtime = get_runtime("gemini-cli", "Planner")
-
-    assert runtime.command[runtime.command.index("--model") + 1] == "agent-model"
+    event = collector.tool_events[0]
+    assert event.metadata["results"] == [
+        {"url": "https://example.com/paper", "title": "Paper", "status": "ok"}
+    ]
+    assert "UNTRUSTED_PAGE_BODY" not in json.dumps(event.metadata)
+    assert collector.visited_urls == {"https://example.com/paper"}
 
 
 @pytest.mark.asyncio
 async def test_harness_persists_sanitized_tools_but_not_internal_evidence(monkeypatch):
     tool_event = ToolInvocationEvent(
-        "browser_read", "success",
+        "browser_read",
+        "success",
         {"urls": ["https://example.com/paper"], "domains": ["example.com"], "result_count": 1},
         duration_ms=25,
     )
-    execution = ProviderExecution(
+    execution = DeepAgentExecution(
         {"topic": "Attention", "sources": []},
         (tool_event,),
         frozenset({"https://example.com/paper"}),
@@ -130,8 +141,14 @@ async def test_harness_persists_sanitized_tools_but_not_internal_evidence(monkey
             pass
 
     session = SimpleNamespace(
-        id="session-id", agent_run_id="run-id", agent_name="Researcher", status="active",
-        output_payload=None, error_message=None, completed_at=None, duration_ms=None,
+        id="session-id",
+        agent_run_id="run-id",
+        agent_name="Researcher",
+        status="active",
+        output_payload=None,
+        error_message=None,
+        completed_at=None,
+        duration_ms=None,
     )
     audit_calls = []
     appended = []
@@ -149,11 +166,11 @@ async def test_harness_persists_sanitized_tools_but_not_internal_evidence(monkey
     async def trace(*args, **kwargs):
         trace_calls.append((args, kwargs))
 
-    monkeypatch.setattr(runtime_module, "get_runtime", lambda *_args: Runtime())
+    monkeypatch.setattr(runtime_module, "DeepAgentRuntime", lambda: Runtime())
     monkeypatch.setattr(runtime_module, "LiteLLMGateway", Gateway)
     monkeypatch.setattr(runtime_module, "record_tool_invocation", audit)
     monkeypatch.setattr(runtime_module, "record_trace_event", trace)
-    harness = AgentHarness("gemini-cli", Db())
+    harness = AgentHarness("deep-agents", Db())
     monkeypatch.setattr(harness, "get", get)
     monkeypatch.setattr(harness, "_append", append)
 
@@ -172,6 +189,9 @@ async def test_harness_persists_sanitized_tools_but_not_internal_evidence(monkey
     assert appended[0][2] == "Ephemeral research evidence omitted."
     assert "UNTRUSTED_PAGE_BODY" not in json.dumps(trace_calls, default=str)
     assert any(
-        call[1].get("input_payload") == {"redacted": True, "reason": "ephemeral research evidence"}
+        call[1].get("input_payload") == {
+            "redacted": True,
+            "reason": "ephemeral research evidence",
+        }
         for call in trace_calls
     )

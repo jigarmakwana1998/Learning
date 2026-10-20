@@ -17,4 +17,5 @@ os.environ.setdefault("JWT_SECRET", "test-secret-with-at-least-32-characters")
 os.environ.setdefault("APP_ENCRYPTION_KEY", Fernet.generate_key().decode())
 os.environ.setdefault("ADMIN_EMAIL", "admin@example.com")
 os.environ.setdefault("ADMIN_PASSWORD", "AdminPass123!")
-os.environ["AGENT_HARNESS"] = "gemini-cli"
+os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
+os.environ["AGENT_CHECKPOINT_DATABASE_URL"] = "sqlite+aiosqlite:///:memory:"
