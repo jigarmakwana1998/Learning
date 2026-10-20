@@ -11,7 +11,8 @@ from app.controllers import analytics_router, auth_router, learning_router, obse
 from app.core.config import get_settings
 from app.core.database import engine
 from app.di.providers import ApplicationProvider
-from app.models.database import Base
+from app.models.database import AgentRun, Base
+from sqlalchemy import update
 
 # Route every library's logs (SQLAlchemy, httpx, LiteLLM, agents) to stdout so
 # `docker compose logs` shows them. LOG_LEVEL=DEBUG prints everything.
@@ -27,6 +28,14 @@ async def lifespan(_: FastAPI):
     if settings.database_url.startswith("sqlite"):
         async with engine.begin() as connection:
             await connection.run_sync(Base.metadata.create_all)
+    # Runs execute in-process, so any still "running" at startup were lost in a
+    # restart. ponytail: single API process; a job queue needs a smarter check.
+    async with engine.begin() as connection:
+        await connection.execute(
+            update(AgentRun)
+            .where(AgentRun.status == "running")
+            .values(status="failed", result={"error": "Interrupted by a server restart; please try again."})
+        )
     yield
     await engine.dispose()
 

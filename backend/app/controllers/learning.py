@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -23,10 +23,19 @@ from app.schemas.session import (
 router = APIRouter(prefix="/learning-runs", tags=["learning"])
 
 
-@router.post("", response_model=LearningRun, response_model_exclude_none=True)
-async def create_learning_run(request: LearningRunRequest, db: AsyncSession = Depends(get_db), user: User = Depends(get_current_user)) -> LearningRun:
-    try: return await learning_service.create_run(db, user, request)
-    except (RuntimeError, ValueError) as error: raise HTTPException(status_code=422, detail=str(error)) from error
+@router.post("", status_code=202)
+async def create_learning_run(request: LearningRunRequest, background_tasks: BackgroundTasks, db: AsyncSession = Depends(get_db), user: User = Depends(get_current_user)) -> dict:
+    """Start generation and return at once; poll /{id}/status, then GET /{id}."""
+    run = await learning_service.start_run(db, user, request)
+    background_tasks.add_task(learning_service.execute_in_background, run.id, request)
+    return {"id": run.id, "status": run.status}
+
+
+@router.get("/{run_id}/status")
+async def get_learning_run_status(run_id: str, db: AsyncSession = Depends(get_db), user: User = Depends(get_current_user)) -> dict:
+    run = await _owned_run_or_404(run_id, db, user)
+    error = (run.result or {}).get("error") if run.status == "failed" else None
+    return {"id": run.id, "status": run.status, "error": error}
 
 
 @router.get("")

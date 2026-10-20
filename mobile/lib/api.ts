@@ -41,7 +41,24 @@ export const login = (email: string, password: string) => authenticate("login", 
 export const register = (email: string, password: string) => authenticate("register", email, password);
 export const logout = clearToken;
 export const getMe = () => request<User>("/auth/me");
-export const createLearningRun = (topic: string, hoursPerWeek: number) => request<LearningRun>("/learning-runs", { method: "POST", body: JSON.stringify({ topic, hours_per_week: hoursPerWeek, weeks: 4, level: "beginner" }) });
+export async function createLearningRun(topic: string, hoursPerWeek: number): Promise<LearningRun> {
+  const { id } = await request<{ id: string }>("/learning-runs", { method: "POST", body: JSON.stringify({ topic, hours_per_week: hoursPerWeek, weeks: 4, level: "beginner" }) });
+  // Generation can take many minutes; poll instead of holding one request open.
+  // A status check can blip (e.g. a transient auth 502); only give up after 3 in a row.
+  for (let failures = 0; ; ) {
+    await new Promise((resolve) => setTimeout(resolve, 5000));
+    let run: { status: string; error?: string | null };
+    try {
+      run = await request(`/learning-runs/${id}/status`);
+      failures = 0;
+    } catch (error) {
+      if (++failures >= 3) throw error;
+      continue;
+    }
+    if (run.status === "completed") return request<LearningRun>(`/learning-runs/${id}`);
+    if (run.status === "failed") throw new Error(run.error ?? "Course generation failed.");
+  }
+}
 export const getOverview = () => request<AnalyticsOverview>("/analytics/overview");
 export const getUsers = () => request<{ items: User[] }>("/analytics/users");
 export const getSessions = () => request<Session[]>("/analytics/sessions");

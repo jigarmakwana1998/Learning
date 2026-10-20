@@ -48,11 +48,13 @@ def main() -> None:
                 "hours_per_week": 3,
             },
         )
-        if response.status_code != 200:
-            raise RuntimeError(
-                f"Live course generation failed ({response.status_code}): {response.text[:2000]}"
-            )
-        course = response.json()
+        response.raise_for_status()
+        # TestClient finishes the background generation before returning.
+        run_id = response.json()["id"]
+        status = client.get(f"/learning-runs/{run_id}/status", headers=headers).json()
+        if status["status"] != "completed":
+            raise RuntimeError(f"Live course generation failed: {status['error']}")
+        course = client.get(f"/learning-runs/{run_id}", headers=headers).json()
         modules = course["course"]["modules"]
         lessons = [lesson for module in modules for lesson in module["lessons"]]
         coverage = course["research"].get("coverage", [])

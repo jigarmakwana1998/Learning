@@ -1,5 +1,6 @@
 import ipaddress
 import json
+import logging
 import re
 from collections import Counter
 from datetime import datetime, timezone
@@ -15,6 +16,7 @@ from app.agents import (
 )
 from app.browser.gateway import BrowserGateway
 from app.core.config import get_settings
+from app.core.database import SessionLocal
 from app.core.security import encrypt
 from app.harness import AgentHarness
 from app.mcp.audit import record_tool_invocation, record_trace_event
@@ -29,19 +31,39 @@ from app.schemas.learning import (
     SourceVisit,
 )
 
+logger = logging.getLogger(__name__)
+
 
 class LearningService:
     browser_gateway_factory = BrowserGateway
 
     async def create_run(self, db: AsyncSession, user: User, request: LearningRunRequest) -> LearningRun:
-        harness_name = "deep-agents"
+        run = await self.start_run(db, user, request)
+        return await self.execute_run(db, run, LearningGoal.model_validate(request))
+
+    async def start_run(self, db: AsyncSession, user: User, request: LearningRunRequest) -> AgentRun:
+        """Persist a running run so callers can return its id before generation finishes."""
         goal = LearningGoal.model_validate(request)
         learning_request = LearningRequest(user_id=user.id, topic=goal.topic, level=goal.level, hours_per_week=goal.hours_per_week, weeks=goal.weeks)
         db.add(learning_request)
         await db.flush()
-        run = AgentRun(learning_request_id=learning_request.id, harness=harness_name)
+        run = AgentRun(learning_request_id=learning_request.id, harness="deep-agents")
         db.add(run)
-        await db.flush()
+        await db.commit()
+        return run
+
+    async def execute_in_background(self, run_id: str, request: LearningRunRequest) -> None:
+        # ponytail: in-process task, lost on restart (startup marks it failed);
+        # move to a job queue if runs must survive restarts or scale out.
+        async with SessionLocal() as db:
+            run = await db.get(AgentRun, run_id)
+            try:
+                await self.execute_run(db, run, LearningGoal.model_validate(request))
+            except Exception:
+                logger.exception("learning run %s failed", run_id)
+
+    async def execute_run(self, db: AsyncSession, run: AgentRun, goal: LearningGoal) -> LearningRun:
+        harness_name = run.harness
         harness = AgentHarness(harness_name, db)
         planner = PlannerAgent()
         try:
@@ -70,8 +92,9 @@ class LearningService:
             run.status, run.result, run.completed_at = "completed", result.model_dump(mode="json"), datetime.now(timezone.utc)
             await db.commit()
             return self.public_learning_run(result)
-        except Exception:
-            run.status, run.completed_at = "failed", datetime.now(timezone.utc)
+        except Exception as error:
+            detail = str(error) if isinstance(error, RuntimeError | ValueError) else "Course generation failed"
+            run.status, run.result, run.completed_at = "failed", {"error": detail}, datetime.now(timezone.utc)
             await db.commit()
             raise
 
@@ -1552,7 +1575,7 @@ class LearningService:
 
     @staticmethod
     def learning_run(run: AgentRun) -> LearningRun:
-        if not run.result:
+        if run.status != "completed" or not run.result:
             raise ValueError("Learning run has not completed")
         return LearningRun.model_validate(run.result)
 
