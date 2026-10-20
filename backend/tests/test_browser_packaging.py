@@ -109,3 +109,10 @@ def test_compose_gives_only_api_public_egress_and_ephemeral_browser_state():
 
     networks = compose.split("\nnetworks:\n", maxsplit=1)[1]
     assert re.search(r"(?m)^  internal:\s*\n    internal: true$", networks)
+
+
+def test_litellm_mcp_client_imports_with_pinned_mcp():
+    # litellm>=1.103 imports mcp 2 types here and broke /learning-runs at runtime.
+    import importlib
+
+    importlib.import_module("litellm.experimental_mcp_client")
