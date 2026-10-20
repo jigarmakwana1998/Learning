@@ -232,7 +232,7 @@ def test_client_uses_argument_array_and_enforces_security_environment(monkeypatc
     policy = json.loads(client.policy_path.read_text())
     assert policy == {
         "default": "deny",
-        "allow": ["navigate", "snapshot", "scroll", "wait", "get", "url", "title", "text", "gettext", "close"],
+        "allow": ["launch", "navigate", "snapshot", "scroll", "wait", "get", "url", "title", "text", "gettext", "close"],
     }
 
 

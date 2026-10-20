@@ -178,6 +178,7 @@ class AgentBrowserClient:
         # credentials. Give the third-party child only the OS/runtime values it
         # needs instead of inheriting the API process environment wholesale.
         allowed_environment = {
+            "AGENT_BROWSER_EXECUTABLE_PATH",
             "APPDATA",
             "COMSPEC",
             "HOME",
@@ -194,6 +195,7 @@ class AgentBrowserClient:
             "USERPROFILE",
             "WINDIR",
             "XDG_CACHE_HOME",
+            "XDG_CONFIG_HOME",
         }
         environment = {key: value for key, value in os.environ.items() if key.upper() in allowed_environment}
         environment.update(
