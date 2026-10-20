@@ -269,8 +269,13 @@ def test_fake_browser_and_deep_agent_generate_complete_course(tmp_path, monkeypa
                 headers=learner,
                 json={"topic": "Python functions", "weeks": 1, "hours_per_week": 3},
             )
-            assert response.status_code == 200, response.text
-            course = response.json()
+            assert response.status_code == 202, response.text
+            started = response.json()
+            assert started["status"] == "running"
+            # TestClient runs background tasks before returning the response.
+            status = client.get(f"/learning-runs/{started['id']}/status", headers=learner).json()
+            assert status == {"id": started["id"], "status": "completed", "error": None}
+            course = client.get(f"/learning-runs/{started['id']}", headers=learner).json()
             assert len(course["research"]["sources"]) == 5
             assert len(course["research"]["visited_sources"]) == 5
             assert course["research"]["stop_reason"] == "coverage_satisfied"

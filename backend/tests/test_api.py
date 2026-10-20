@@ -42,3 +42,20 @@ def test_configured_admin_email_is_promoted_in_supabase(fake_supabase):
         token = client.post("/auth/register", json={"email": "Owner@example.com", "password": "OwnerPass123!"}).json()["access_token"]
         assert client.get("/auth/me", headers={"Authorization": f"Bearer {token}"}).json()["role"] == "admin"
     assert fake_supabase.users["owner@example.com"]["app_metadata"] == {"role": "admin"}
+
+
+def test_failed_background_run_reports_reason_through_status(monkeypatch):
+    from app.services.learning_service import learning_service
+
+    async def fail_research(*_args):
+        raise ValueError("No verified evidence supports the requested topic.")
+
+    monkeypatch.setattr(learning_service, "_browser_research", fail_research)
+    with TestClient(app) as client:
+        headers = auth(client, "async-runner@example.com")
+        started = client.post("/learning-runs", headers=headers, json={"topic": "Transformers", "weeks": 1})
+        assert started.status_code == 202 and started.json()["status"] == "running"
+        run_id = started.json()["id"]
+        status = client.get(f"/learning-runs/{run_id}/status", headers=headers).json()
+        assert status == {"id": run_id, "status": "failed", "error": "No verified evidence supports the requested topic."}
+        assert client.get(f"/learning-runs/{run_id}", headers=headers).status_code == 409

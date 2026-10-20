@@ -127,7 +127,10 @@ async def test_create_run_stops_before_planning_when_research_evidence_is_insuff
         )
 
     assert harness_calls == []
-    assert db.commits == 1
+    assert db.commits == 2  # run persisted on start, then marked failed
+    run = next(record for record in db.added if type(record).__name__ == "AgentRun")
+    assert run.status == "failed"
+    assert run.result == {"error": "No verified evidence supports the requested topic."}
 
 
 @pytest.mark.parametrize(
