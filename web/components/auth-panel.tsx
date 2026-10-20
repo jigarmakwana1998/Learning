@@ -20,6 +20,10 @@ export function AuthPanel({ onAuthenticated }: { onAuthenticated: (token: string
     setPending(true);
     try {
       const result = await (mode === "login" ? login(email, password) : register(email, password));
+      if (!result.access_token) {
+        setError(result.message ?? "Check your inbox to confirm your email, then sign in.");
+        return;
+      }
       sessionStorage.setItem("learning-coach-token", result.access_token);
       onAuthenticated(result.access_token);
     } catch (reason) {

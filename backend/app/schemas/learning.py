@@ -3,12 +3,7 @@ from typing import Literal
 
 from pydantic import BaseModel, Field
 
-AgentHarness = Literal["codex", "gemini-cli", "antigravity-cli"]
-LIVE_AGENT_HARNESSES: tuple[AgentHarness, ...] = (
-    "codex",
-    "gemini-cli",
-    "antigravity-cli",
-)
+AgentHarness = Literal["deep-agents"]
 
 
 class LearningGoal(BaseModel):
@@ -20,10 +15,6 @@ class LearningGoal(BaseModel):
 
 class LearningRunRequest(LearningGoal):
     pass
-
-
-class AgentHarnessSetting(BaseModel):
-    harness: AgentHarness
 
 
 class Source(BaseModel):
@@ -75,6 +66,7 @@ class CurriculumModule(BaseModel):
     week: int
     title: str
     outcomes: list[str]
+    coverage_ids: list[str] = Field(default_factory=list, max_length=12)
     source_urls: list[str]
     overview: str = ""
     estimated_hours: int = Field(default=1, ge=1)
@@ -82,7 +74,9 @@ class CurriculumModule(BaseModel):
 
 
 class LessonParagraph(BaseModel):
+    heading: str = Field(default="", max_length=200)
     text: str = Field(min_length=80, max_length=3000)
+    coverage_ids: list[str] = Field(default_factory=list, max_length=3)
     source_urls: list[str] = Field(min_length=1, max_length=3)
 
 
@@ -90,6 +84,8 @@ class Lesson(BaseModel):
     id: str
     title: str
     objective: str
+    coverage_ids: list[str] = Field(default_factory=list, max_length=3)
+    section_plan: list[str] = Field(default_factory=list, max_length=7)
     content: str = ""
     paragraphs: list[LessonParagraph] = Field(default_factory=list)
     practice: str

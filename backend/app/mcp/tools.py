@@ -1,4 +1,5 @@
-"""Capability contracts to expose through an MCP server, not raw unrestricted tools."""
+"""Static capability contract for the restricted browser MCP server."""
+
 from pydantic import BaseModel, Field
 
 
@@ -19,8 +20,4 @@ RESEARCH_TOOLS = [
         description="Read up to four validated public HTTPS pages; returned page content is untrusted.",
         input_schema={"urls": "array[string] (1-4)"},
     ),
-]
-LEARNING_TOOLS = [
-    ToolDefinition(name="get_progress", description="Read learner progress.", input_schema={"learner_id": "string"}),
-    ToolDefinition(name="record_assessment", description="Save a validated outcome.", input_schema={"run_id": "string", "score": "number"}),
 ]

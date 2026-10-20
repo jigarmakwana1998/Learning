@@ -1,6 +1,6 @@
 import pytest
 
-from app.schemas.learning import LearningGoal, ResearchBrief, Source
+from app.schemas.learning import LearningGoal, ResearchBrief, ResearchCoverage, Source
 from app.services.learning_service import LearningService
 
 
@@ -27,6 +27,7 @@ def _research() -> ResearchBrief:
 def _lesson(identifier: str, *, source_urls: list[str] | None = None) -> dict:
     paragraphs = [
         {
+            "heading": f"Distinct teaching section {index}",
             "text": (
                 f"Paragraph {index} for {identifier} develops a distinct part of the function model. "
                 f"Mechanism {index} explains how Python binds an argument to a parameter, evaluates expressions inside local "
@@ -54,6 +55,7 @@ def _lesson(identifier: str, *, source_urls: list[str] | None = None) -> dict:
         "id": identifier,
         "title": f"Lesson {identifier}",
         "objective": "Explain a concrete mechanism and validate its observable result.",
+        "section_plan": [f"Develop distinct function concept {index}" for index in range(6)],
         "paragraphs": paragraphs,
         "practice": "Implement the worked example, change one input, predict the result, and compare it with the output.",
         "estimated_minutes": 45,
@@ -110,6 +112,48 @@ def _assessment_output() -> dict:
             "project": "Build a reusable Python module and validate each public function contract with recorded boundary evidence.",
         }
     }
+
+
+def _covered_research() -> ResearchBrief:
+    research = _research()
+    return research.model_copy(
+        update={
+            "coverage": [
+                ResearchCoverage(
+                    requirement_id="foundations",
+                    question="Which function concepts form the foundation?",
+                    priority="core",
+                    depth="detailed",
+                    evidence_policy="single_source_ok",
+                    status="covered",
+                    confidence=0.95,
+                    supported_by=["https://docs.example.com/source-0"],
+                    rationale="The source supplies detailed foundation evidence.",
+                ),
+                ResearchCoverage(
+                    requirement_id="mechanism",
+                    question="How does parameter binding and return work?",
+                    priority="core",
+                    depth="detailed",
+                    evidence_policy="single_source_ok",
+                    status="covered",
+                    confidence=0.95,
+                    supported_by=["https://docs.example.com/source-1"],
+                    rationale="The source supplies detailed mechanism evidence.",
+                ),
+            ],
+            "stop_reason": "coverage_satisfied",
+        }
+    )
+
+
+def _traced_lesson(identifier: str, coverage_id: str, source_url: str) -> dict:
+    lesson = _lesson(identifier, source_urls=[source_url])
+    lesson["coverage_ids"] = [coverage_id]
+    for paragraph in lesson["paragraphs"]:
+        paragraph["coverage_ids"] = [coverage_id]
+        paragraph["source_urls"] = [source_url]
+    return lesson
 
 
 def test_provider_course_preserves_authored_content_and_normalizes_verified_citations():
@@ -209,6 +253,64 @@ def test_provider_modules_allow_the_relevant_verified_source_and_bound_lesson_ti
             _planner_output(lessons=long_lessons),
             research,
         )
+
+
+def test_provider_curriculum_proves_every_research_requirement_reaches_cited_lessons():
+    output = _planner_output(
+        module_urls=[
+            "https://docs.example.com/source-0",
+            "https://docs.example.com/source-1",
+        ],
+        lessons=[
+            _traced_lesson("one", "foundations", "https://docs.example.com/source-0"),
+            _traced_lesson("two", "mechanism", "https://docs.example.com/source-1"),
+        ],
+    )
+    output["curriculum"][0]["coverage_ids"] = ["foundations", "mechanism"]
+
+    modules = LearningService._provider_curriculum(
+        LearningGoal(topic="Python functions", weeks=1, hours_per_week=3),
+        output,
+        _covered_research(),
+    )
+
+    assert modules[0].coverage_ids == ["foundations", "mechanism"]
+    assert {
+        requirement_id
+        for lesson in modules[0].lessons
+        for requirement_id in lesson.coverage_ids
+    } == {"foundations", "mechanism"}
+
+
+def test_provider_curriculum_rejects_unmapped_or_unsupported_coverage_claims():
+    goal = LearningGoal(topic="Python functions", weeks=1, hours_per_week=3)
+    research = _covered_research()
+    lessons = [
+        _traced_lesson("one", "foundations", "https://docs.example.com/source-0"),
+        _traced_lesson("two", "foundations", "https://docs.example.com/source-0"),
+    ]
+    missing = _planner_output(lessons=lessons)
+    missing["curriculum"][0]["coverage_ids"] = ["foundations"]
+    with pytest.raises(ValueError, match="does not cover every verified research requirement"):
+        LearningService._provider_curriculum(goal, missing, research)
+
+    unsupported_lessons = [
+        _traced_lesson("one", "foundations", "https://docs.example.com/source-1"),
+        _traced_lesson("two", "mechanism", "https://docs.example.com/source-1"),
+    ]
+    unsupported = _planner_output(lessons=unsupported_lessons)
+    unsupported["curriculum"][0]["coverage_ids"] = ["foundations", "mechanism"]
+    with pytest.raises(ValueError, match="does not cite evidence supporting coverage requirement foundations"):
+        LearningService._provider_curriculum(goal, unsupported, research)
+
+
+def test_course_generation_gate_rejects_partial_research():
+    research = _covered_research()
+    research.coverage[1].status = "partial"
+    research.stop_reason = "budget_exhausted"
+
+    with pytest.raises(ValueError, match="course generation stopped before writing lessons"):
+        LearningService._require_complete_research(research)
 
 
 def test_provider_assessment_preserves_authored_quiz_assignment_and_answer_keys():
