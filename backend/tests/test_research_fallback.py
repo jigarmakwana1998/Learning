@@ -11,6 +11,7 @@ from app.services.learning_service import LearningService
 
 
 KINDS = ("documentation", "paper", "book", "lecture", "slides", "article", "repository")
+REQUIREMENT_IDS = ("foundations", "mechanism", "examples", "limits", "integration")
 
 
 class FakeDb:
@@ -78,22 +79,30 @@ class FakePlainRuntime:
         if self.role == "ResearchQueryPlanner":
             return SimpleNamespace(
                 payload={
-                    "coverage_requirements": [{
-                        "id": "core",
-                        "question": "How do transformers work in practice?",
-                        "priority": "core",
-                        "depth": "detailed",
-                        "evidence_policy": "single_source_ok",
-                    }],
+                    "coverage_requirements": [
+                        {
+                            "id": requirement_id,
+                            "question": f"What evidence teaches transformer {requirement_id}?",
+                            "priority": "core" if index < 3 else "supporting",
+                            "depth": "detailed",
+                            "evidence_policy": "single_source_ok",
+                        }
+                        for index, requirement_id in enumerate(REQUIREMENT_IDS)
+                    ],
                     "queries": [
-                        {"query": "transformer architecture authoritative guide", "purpose": "Cover the core mechanism", "coverage_ids": ["core"]}
+                        {
+                            "query": f"Transformers {requirement_id} authoritative guide",
+                            "purpose": f"Cover {requirement_id}",
+                            "coverage_ids": [requirement_id],
+                        }
+                        for requirement_id in REQUIREMENT_IDS
                     ],
                     "seed_candidates": [
                         {
                             "title": "Canonical transformer guide",
                             "url": "https://seeds.example.com/source-0",
                             "purpose": "Canonical evidence for the core mechanism",
-                            "coverage_ids": ["core"],
+                            "coverage_ids": list(REQUIREMENT_IDS),
                             "kind": "documentation",
                         }
                     ],
@@ -103,19 +112,22 @@ class FakePlainRuntime:
             candidates = payload["context"]["candidates"]
             return SimpleNamespace(
                 payload={
-                    "selections": [{"url": candidates[0]["url"], "kind": "documentation", "coverage_ids": ["core"]}]
+                    "selections": [{"url": candidates[0]["url"], "kind": "documentation", "coverage_ids": list(REQUIREMENT_IDS)}]
                 }
             )
         if self.role.startswith("ResearchCoverageRound"):
             sources = payload["context"]["sources"]
             return SimpleNamespace(payload={
-                "assessments": [{
-                    "requirement_id": "core",
-                    "status": "covered",
-                    "confidence": 0.95,
-                    "supported_by": [sources[0]["url"]],
-                    "rationale": "The canonical guide covers the required mechanism.",
-                }],
+                "assessments": [
+                    {
+                        "requirement_id": requirement_id,
+                        "status": "covered",
+                        "confidence": 0.95,
+                        "supported_by": [sources[0]["url"]],
+                        "rationale": "The canonical guide covers this requirement.",
+                    }
+                    for requirement_id in REQUIREMENT_IDS
+                ],
                 "sufficient": True,
                 "reason": "All requirements are covered.",
             })
@@ -132,7 +144,10 @@ class FakePlainRuntime:
                         "key_points": [
                             f"Explains a concrete mechanism from readable source {index}.",
                         ],
-                        "coverage_evidence": [{"requirement_id": "core", "support": "strong"}],
+                        "coverage_evidence": [
+                            {"requirement_id": requirement_id, "support": "strong"}
+                            for requirement_id in REQUIREMENT_IDS
+                        ],
                     }
                     for index, page in enumerate(pages)
                 ],
@@ -181,7 +196,7 @@ async def test_browser_research_is_bounded_grounded_and_body_free_in_audit(monke
     session, research = await service._browser_research(
         db,
         "run-1",
-        "gemini-cli",
+        "deep-agents",
         LearningGoal(topic="Transformers", weeks=2),
     )
 
@@ -194,7 +209,7 @@ async def test_browser_research_is_bounded_grounded_and_body_free_in_audit(monke
     assert gateway.read_batches == [["https://seeds.example.com/source-0"]]
     assert len(research.sources) == 1
     assert research.stop_reason == "coverage_satisfied"
-    assert research.coverage[0].status == "covered"
+    assert [item.status for item in research.coverage] == ["covered"] * 5
 
     audits = [item for item in db.added if isinstance(item, McpToolInvocation)]
     assert [item.tool_name for item in audits] == [

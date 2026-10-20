@@ -4,15 +4,12 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from dishka import make_async_container
 from dishka.integrations.fastapi import setup_dishka
-from sqlalchemy import select
-
 from app.adapters.inbound.health import router as health_router
-from app.controllers import analytics_router, auth_router, gateway_proxy_router, learning_router, observability_router, sessions_router
+from app.controllers import analytics_router, auth_router, learning_router, observability_router, sessions_router
 from app.core.config import get_settings
-from app.core.database import SessionLocal, engine
-from app.core.security import hash_password
+from app.core.database import engine
 from app.di.providers import ApplicationProvider
-from app.models.database import Base, User
+from app.models.database import Base
 
 
 @asynccontextmanager
@@ -23,14 +20,6 @@ async def lifespan(_: FastAPI):
     if settings.database_url.startswith("sqlite"):
         async with engine.begin() as connection:
             await connection.run_sync(Base.metadata.create_all)
-    async with SessionLocal() as db:
-        # Supabase owns production credentials. Its configured admin email gains
-        # the application admin role when that authenticated user first calls us.
-        if not settings.supabase_url:
-            admin = await db.scalar(select(User).where(User.email == settings.admin_email.lower()))
-            if admin is None:
-                db.add(User(email=settings.admin_email.lower(), password_hash=hash_password(settings.admin_password), role="admin"))
-                await db.commit()
     yield
     await engine.dispose()
 
@@ -40,7 +29,6 @@ app = FastAPI(title=settings.app_name, version=settings.app_version, lifespan=li
 app.add_middleware(CORSMiddleware, allow_origins=settings.cors_origins, allow_credentials=False, allow_methods=["*"], allow_headers=["*"])
 setup_dishka(make_async_container(ApplicationProvider()), app)
 app.include_router(health_router)
-app.include_router(gateway_proxy_router)
 app.include_router(auth_router)
 app.include_router(learning_router)
 app.include_router(sessions_router)

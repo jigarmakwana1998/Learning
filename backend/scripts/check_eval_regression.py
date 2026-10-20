@@ -9,9 +9,13 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from app.agents.examiner import ExaminerAgent
-from app.agents.planner import PlannerAgent
-from app.agents.research_pipeline import ResearchSynthesisAgent
+from app.agents.contracts import output_schema_for  # noqa: E402
+from app.agents.lesson_writer import LessonWriterAgent  # noqa: E402
+from app.agents.planner import PlannerAgent  # noqa: E402
+from app.agents.research_pipeline import (  # noqa: E402
+    ResearchQueryPlannerAgent,
+    ResearchSynthesisAgent,
+)
 
 
 def main() -> None:
@@ -27,13 +31,23 @@ def main() -> None:
         assert not missing, f"fixture {fixture.get('name', '<unnamed>')} is missing: {sorted(missing)}"
 
     instructions = {
+        "query_planner": ResearchQueryPlannerAgent().instruction(),
         "researcher": ResearchSynthesisAgent().instruction(),
         "planner": PlannerAgent().instruction(),
-        "examiner": ExaminerAgent().instruction(),
+        "lesson_writer": LessonWriterAgent().instruction(),
     }
     for agent, terms in baseline["required_agent_output_terms"].items():
         missing = [term for term in terms if term.lower() not in instructions[agent].lower()]
         assert not missing, f"{agent} prompt no longer guarantees: {', '.join(missing)}"
+    for role in (
+        "ResearchQueryPlanner",
+        "ResearchSelector",
+        "ResearchSynthesisPart1",
+        "ResearchCoverageRound1",
+        "Planner",
+        "LessonWriter",
+    ):
+        assert output_schema_for(role) is not None, f"{role} has no structured output contract"
 
 
 if __name__ == "__main__":

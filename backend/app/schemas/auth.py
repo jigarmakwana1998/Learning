@@ -11,9 +11,10 @@ class LoginRequest(RegisterRequest):
 
 
 class TokenResponse(BaseModel):
-    access_token: str
+    access_token: str | None = None
     token_type: str = "bearer"
     role: str
+    message: str | None = None
 
 
 class UserResponse(BaseModel):

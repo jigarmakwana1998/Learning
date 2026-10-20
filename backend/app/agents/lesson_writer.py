@@ -10,13 +10,17 @@ class LessonWriterAgent(LearningAgent):
     def instruction(self) -> str:
         return (
             "Write the complete body for exactly one planned lesson using only the supplied browser-verified research. "
-            "Return exactly one JSON object and no markdown: {lesson:{id,paragraphs:[{text,source_urls}]}}. Copy the "
-            "lesson id exactly. Return 5-7 distinct paragraphs, each 220-300 words, totaling 1,200-1,800 substantive "
-            "words. Teach the topic rather than describing a study plan: establish the definition and motivation, explain "
+            "Populate the structured lesson and paragraph fields. Copy the "
+            "lesson id exactly. Return exactly one distinct paragraph for each item in lesson_draft.section_plan, in the same "
+            "order, totaling 1,200-1,800 substantive words (roughly 200-300 words per paragraph). Cover every item in "
+            "context.coverage_targets in at least one "
+            "paragraph. Each paragraph must declare only the coverage_ids it actually teaches. Teach the topic rather than "
+            "describing a study plan: establish the definition and motivation, explain "
             "the mechanism step by step, connect it to the wider architecture, give a concrete worked example, and discuss "
             "limitations or current practice where relevant. Use the draft only as an outline; expand it with the supplied "
             "source key points without repeating sentences or the learner prompt. Every paragraph must carry 1-3 exact "
             "source_urls that directly support it. Use multiple sources when they add complementary evidence, but do not add a "
             "second citation merely for diversity when one authoritative source covers the lesson. Copy URLs exactly "
-            "from verified_sources. Never invent, shorten, or rewrite a URL and never add unsupported facts."
+            "from verified_sources, and for every declared coverage_id cite at least one URL listed in that target's "
+            "supported_by. Never invent, shorten, or rewrite a URL and never add unsupported facts."
         )

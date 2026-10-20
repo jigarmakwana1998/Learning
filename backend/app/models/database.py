@@ -16,17 +16,10 @@ class Base(DeclarativeBase):
 class User(Base):
     __tablename__ = "users"
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid4()))
+    auth_subject: Mapped[str | None] = mapped_column(String(36), unique=True, nullable=True)
     email: Mapped[str] = mapped_column(String(320), unique=True, index=True)
-    password_hash: Mapped[str] = mapped_column(String(512))
     role: Mapped[str] = mapped_column(String(16), default="learner", index=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
-
-
-class SystemSetting(Base):
-    __tablename__ = "system_settings"
-    key: Mapped[str] = mapped_column(String(80), primary_key=True)
-    value: Mapped[str] = mapped_column(String(80), nullable=False)
-    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now, onupdate=now)
 
 
 class LearningRequest(Base):

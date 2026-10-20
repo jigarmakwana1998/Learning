@@ -15,7 +15,8 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     PATH=/opt/learning-tools/node_modules/.bin:$PATH \
     PUPPETEER_CACHE_DIR=/opt/agent-browser-cache \
     AGENT_BROWSER_CONTENT_BOUNDARIES=1 \
-    AGENT_BROWSER_MAX_OUTPUT=6000
+    AGENT_BROWSER_MAX_OUTPUT=6000 \
+    LITELLM_LOCAL_MODEL_COST_MAP=True
 
 WORKDIR /app
 
@@ -45,16 +46,13 @@ RUN pip install --no-cache-dir -r requirements.txt
 COPY backend/app ./app
 COPY backend/alembic ./alembic
 COPY backend/alembic.ini ./alembic.ini
-COPY .gemini ./.gemini
-
 RUN chown -R app:app /app
 
 USER app
 
 # Validate executable discovery and the durable Chrome cache as the same
 # unprivileged user that serves API requests. No model request is made.
-RUN agent-browser doctor --offline --quick \
-    && gemini --version
+RUN agent-browser doctor --offline --quick
 
 EXPOSE 8000
 

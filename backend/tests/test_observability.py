@@ -11,7 +11,9 @@ from app.models.database import AgentRun, AgentSessionRecord, AgentTraceEvent, L
 def _auth(client: TestClient) -> dict[str, str]:
     client.post("/auth/register", json={"email": "trace@example.com", "password": "LearnerPass123!"})
     token = client.post("/auth/login", json={"email": "trace@example.com", "password": "LearnerPass123!"}).json()["access_token"]
-    return {"Authorization": f"Bearer {token}"}
+    headers = {"Authorization": f"Bearer {token}"}
+    assert client.get("/auth/me", headers=headers).status_code == 200
+    return headers
 
 
 async def _seed_trace() -> str:
@@ -20,7 +22,7 @@ async def _seed_trace() -> str:
         request = LearningRequest(user_id=user.id, topic="Tracing", level="beginner", weeks=2, hours_per_week=4)
         db.add(request)
         await db.flush()
-        run = AgentRun(learning_request_id=request.id, harness="gemini-cli", status="completed")
+        run = AgentRun(learning_request_id=request.id, harness="deep-agents", status="completed")
         db.add(run)
         await db.flush()
 
@@ -28,7 +30,7 @@ async def _seed_trace() -> str:
             session = AgentSessionRecord(
                 agent_run_id=run.id,
                 agent_name=agent_name,
-                harness="gemini-cli",
+                harness="deep-agents",
                 status="completed",
             )
             db.add(session)
@@ -67,7 +69,7 @@ def test_run_trace_exposes_model_boundaries_for_the_owner():
         assert trace.status_code == 200
         body = trace.json()
         assert len(body["sessions"]) == 3
-        assert body["harness"] == "gemini-cli"
+        assert body["harness"] == "deep-agents"
         assert any(event["name"] == "harness.request" for event in body["events"])
         assert any(event["name"] == "harness.response" for event in body["events"])
         assert all("input_payload" in event for event in body["events"])
