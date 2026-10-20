@@ -1,3 +1,5 @@
+import logging
+import os
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
@@ -11,6 +13,11 @@ from app.core.database import engine
 from app.di.providers import ApplicationProvider
 from app.models.database import Base
 
+# Route every library's logs (SQLAlchemy, httpx, LiteLLM, agents) to stdout so
+# `docker compose logs` shows them. LOG_LEVEL=DEBUG prints everything.
+_log_level = os.getenv("LOG_LEVEL", "INFO").upper()
+logging.basicConfig(level=_log_level, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
+logging.getLogger("uvicorn").setLevel(_log_level)
 
 @asynccontextmanager
 async def lifespan(_: FastAPI):
