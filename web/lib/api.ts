@@ -145,9 +145,17 @@ export const getMe = (token: string) => request<User>("/auth/me", {}, token);
 export async function createLearningRun(intent: TopicIntent, token: string): Promise<LearningRun> {
   const { id } = await request<{ id: string }>("/learning-runs", { method: "POST", body: JSON.stringify({ topic: intent.topic, level: intent.level, hours_per_week: intent.hoursPerWeek, weeks: intent.weeks }) }, token);
   // Generation can take many minutes; poll instead of holding one request open.
-  for (;;) {
+  // A status check can blip (e.g. a transient auth 502); only give up after 3 in a row.
+  for (let failures = 0; ; ) {
     await new Promise((resolve) => setTimeout(resolve, 5000));
-    const run = await request<{ status: string; error?: string | null }>(`/learning-runs/${id}/status`, {}, token);
+    let run: { status: string; error?: string | null };
+    try {
+      run = await request(`/learning-runs/${id}/status`, {}, token);
+      failures = 0;
+    } catch (error) {
+      if (++failures >= 3) throw error;
+      continue;
+    }
     if (run.status === "completed") return request<LearningRun>(`/learning-runs/${id}`, {}, token);
     if (run.status === "failed") throw new Error(run.error ?? "Course generation failed.");
   }
