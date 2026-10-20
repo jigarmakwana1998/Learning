@@ -63,20 +63,18 @@ class Settings(BaseModel):
     litellm_api_key: str | None = Field(default_factory=lambda: os.getenv("LITELLM_API_KEY") or None)
     litellm_model: str = Field(default_factory=lambda: os.getenv("LITELLM_MODEL", "agent-model"))
     database_url: str = Field(default_factory=lambda: os.getenv("DATABASE_URL", "sqlite+aiosqlite:///./learning_coach.db"))
-    jwt_secret: str = Field(default_factory=lambda: os.getenv("JWT_SECRET", "change-this-development-jwt-secret"))
     encryption_key: str = Field(default_factory=lambda: required_environment("APP_ENCRYPTION_KEY"))
     cors_origins: list[str] = Field(default_factory=lambda: [origin.strip() for origin in os.getenv("CORS_ORIGINS", "http://localhost:8081,http://localhost:19006").split(",") if origin.strip()])
-    admin_email: str = Field(default_factory=lambda: os.getenv("ADMIN_EMAIL", "admin@example.com"))
-    admin_password: str = Field(default_factory=lambda: os.getenv("ADMIN_PASSWORD", "change-me-now"))
     research_max_searches: int = Field(default_factory=lambda: int(os.getenv("RESEARCH_MAX_SEARCHES", "20")))
     research_max_pages: int = Field(default_factory=lambda: int(os.getenv("RESEARCH_MAX_PAGES", "40")))
     research_max_actions: int = Field(default_factory=lambda: int(os.getenv("RESEARCH_MAX_ACTIONS", "60")))
     research_max_elapsed_seconds: int = Field(
         default_factory=lambda: int(os.getenv("RESEARCH_MAX_ELAPSED_SECONDS", "600"))
     )
-    local_auth: bool = Field(default_factory=lambda: os.getenv("LOCAL_AUTH", "false").casefold() == "true")
-    supabase_url: str | None = Field(default_factory=lambda: None if os.getenv("LOCAL_AUTH", "false").casefold() == "true" else os.getenv("SUPABASE_URL") or None)
-    supabase_publishable_key: str | None = Field(default_factory=lambda: None if os.getenv("LOCAL_AUTH", "false").casefold() == "true" else os.getenv("SUPABASE_PUBLISHABLE_KEY") or None)
+    supabase_url: str = Field(default_factory=lambda: required_environment("SUPABASE_URL"))
+    supabase_publishable_key: str = Field(default_factory=lambda: required_environment("SUPABASE_PUBLISHABLE_KEY"))
+    supabase_secret_key: str | None = Field(default_factory=lambda: os.getenv("SUPABASE_SECRET_KEY") or None)
+    admin_email: str | None = Field(default_factory=lambda: (os.getenv("ADMIN_EMAIL") or "").lower() or None)
 
 
 @lru_cache

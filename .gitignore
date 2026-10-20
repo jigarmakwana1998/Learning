@@ -13,3 +13,5 @@ backend/.test-*/
 learning_live_smoke.db
 node_modules/
 .local-*.log
+
+%SystemDrive%/

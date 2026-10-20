@@ -60,7 +60,9 @@ The API docs are available at `http://127.0.0.1:8000/docs`. Course generation
 always uses Deep Agents with public browser research. The stable `agent-model`
 LiteLLM alias currently resolves to NVIDIA's `z-ai/glm-5.3-flash` endpoint.
 
-For local-only development, set `DATABASE_URL=sqlite+aiosqlite:///./learning_local.db` and `LOCAL_AUTH=true`. This explicitly disables Supabase token verification for that process; never enable it in a deployed environment.
+Local development may use SQLite for application data, but authentication still
+requires Supabase. Both frontends call the backend auth endpoints; Supabase keys
+and authentication requests remain behind the API.
 
 Copy `backend/.env.example` to `backend/.env`, set the Supabase values, and
 replace the encryption key before deployment. Install the pinned browser tool
@@ -136,11 +138,11 @@ backend/app/
 
 ## Accounts, analytics, and evaluation
 
-- `POST /auth/register`, `POST /auth/login`, and `GET /auth/me` provide email/password JWT authentication. The configured `ADMIN_EMAIL` / `ADMIN_PASSWORD` account is created with the `admin` role on first startup.
+- `POST /auth/register`, `POST /auth/login`, and `GET /auth/me` proxy and validate Supabase Auth. Set `ADMIN_EMAIL` and the server-only `SUPABASE_SECRET_KEY` and that user is promoted to Supabase `app_metadata.role=admin` on first sign-in (or set the role in the Supabase dashboard); the application never stores passwords or issues its own login tokens.
 - Agent runs, sessions, tool invocations, and encrypted/redacted transcript entries are persisted. Learners can access only their own data; `/analytics/*` is admin-only.
 - The Expo client includes an admin analytics screen with user and session lists, outcome metrics, and full searchable transcript drill-down.
-- Run the test suite with `cd backend && pytest -q --benchmark-disable`; run benchmarks with `pytest --benchmark-only`. The tests use controlled model and browser doubles but exercise the same browser-research and course-validation pipeline.
-- Run a complete opt-in live course smoke test with `cd backend && python scripts/live_course_smoke.py`. It consumes NVIDIA API quota, browses public pages, prints the exact selected source URLs and coverage metrics, and fails unless all research requirements map through modules and lessons to full-length cited paragraphs.
+- Run the test suite with `cd backend && pytest -q --benchmark-disable`; `tests/test_supabase_live.py` checks the auth contract against the real Supabase project from `backend/.env` (creating and deleting a throwaway confirmed user) and fails in CI without the `SUPABASE_URL`, `SUPABASE_PUBLISHABLE_KEY` and `SUPABASE_SECRET_KEY` repository secrets; run benchmarks with `pytest --benchmark-only`. The tests use controlled model and browser doubles but exercise the same browser-research and course-validation pipeline.
+- Run a complete opt-in live course smoke test with `LIVE_SMOKE_EMAIL` and `LIVE_SMOKE_PASSWORD` set for a confirmed Supabase account, then `cd backend && python scripts/live_course_smoke.py`. It consumes NVIDIA API quota, browses public pages, prints the exact selected source URLs and coverage metrics, and fails unless all research requirements map through modules and lessons to full-length cited paragraphs.
 
 ## Next product milestones
 
