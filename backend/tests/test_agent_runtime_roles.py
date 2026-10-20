@@ -133,9 +133,6 @@ async def test_harness_persists_sanitized_tools_but_not_internal_evidence(monkey
         async def create_trace_key(self, **_kwargs):
             return "test-trace-key"
 
-        async def spend_logs(self, _api_key):
-            return [{"messages": [{"role": "user", "content": "UNTRUSTED_PAGE_BODY"}]}]
-
     class Db:
         async def flush(self):
             pass
@@ -184,10 +181,4 @@ async def test_harness_persists_sanitized_tools_but_not_internal_evidence(monkey
     assert tool_call["duration_ms"] == 25
     assert appended[0][2] == "Ephemeral research evidence omitted."
     assert "UNTRUSTED_PAGE_BODY" not in json.dumps(trace_calls, default=str)
-    assert any(
-        call[1].get("input_payload") == {
-            "redacted": True,
-            "reason": "ephemeral research evidence",
-        }
-        for call in trace_calls
-    )
+    assert not any(call[1]["event_type"] == "model" for call in trace_calls)

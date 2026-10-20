@@ -72,11 +72,10 @@ class AgentHarness:
                 "model_gateway": "litellm",
             },
         )
-        gateway = None
-        gateway_api_key = None
         try:
-            gateway = LiteLLMGateway()
-            gateway_api_key = await gateway.create_trace_key(
+            # Model calls (prompts, responses, tokens, cost) live only in LiteLLM's spend
+            # logs; they are tagged with run_id/session_id and read back by observability.
+            gateway_api_key = await LiteLLMGateway().create_trace_key(
                 run_id=session.run_id,
                 session_id=session_id,
                 harness=self.harness,
@@ -161,24 +160,6 @@ class AgentHarness:
             )
             raise
         finally:
-            if gateway and gateway_api_key:
-                try:
-                    await self._record_model_events(
-                        session,
-                        await gateway.spend_logs(gateway_api_key),
-                        redact_input=persisted_prompt is not None,
-                    )
-                except Exception as telemetry_error:
-                    await record_trace_event(
-                        self.db,
-                        run_id=session.run_id,
-                        session_id=session_id,
-                        event_type="lifecycle",
-                        name="litellm.trace_sync_failed",
-                        status="failed",
-                        metadata={"harness": self.harness},
-                        error=str(telemetry_error)[:2000],
-                    )
             session.completed_at = datetime.now(timezone.utc)
             session.duration_ms = int((perf_counter() - started) * 1000)
             await self.db.flush()
@@ -221,91 +202,6 @@ class AgentHarness:
         )
         payload = {key: event[key] for key in keys if key in event}
         return payload or None
-
-    async def _record_model_events(
-        self,
-        session: AgentEvent,
-        logs: list[dict],
-        *,
-        redact_input: bool = False,
-    ) -> None:
-        for log in logs:
-            proxy_request = log.get("proxy_server_request")
-            request_body = proxy_request.get("body") if isinstance(proxy_request, dict) else None
-            messages = log.get("messages")
-            input_payload = {"messages": messages} if messages is not None else request_body
-            if input_payload is not None and not isinstance(input_payload, dict):
-                input_payload = {"request": input_payload}
-            if redact_input and input_payload is not None:
-                input_payload = {"redacted": True, "reason": "ephemeral research evidence"}
-            response = log.get("response")
-            output_payload = response if isinstance(response, dict) else {"response": response}
-            if response is None:
-                output_payload = None
-            metadata = {
-                key: log.get(key)
-                for key in (
-                    "request_id",
-                    "call_type",
-                    "model",
-                    "model_group",
-                    "custom_llm_provider",
-                    "api_base",
-                    "cache_hit",
-                )
-                if log.get(key) is not None
-            }
-            await record_trace_event(
-                self.db,
-                run_id=session.run_id,
-                session_id=session.id,
-                event_type="model",
-                name=f"litellm.{log.get('call_type') or 'completion'}",
-                status=self._model_status(log.get("status")),
-                input_payload=input_payload,
-                output_payload=output_payload,
-                metadata=metadata,
-                duration_ms=self._model_duration(log),
-                prompt_tokens=self._as_int(log.get("prompt_tokens")),
-                completion_tokens=self._as_int(log.get("completion_tokens")),
-                total_cost_usd=self._as_float(log.get("spend")),
-                created_at=self._timestamp(log.get("startTime")),
-            )
-
-    @staticmethod
-    def _model_status(status: object) -> str:
-        return "failed" if str(status).lower() in {"failed", "failure", "error"} else "completed"
-
-    @staticmethod
-    def _as_int(value: object) -> int | None:
-        try:
-            return int(value) if value is not None else None
-        except (TypeError, ValueError):
-            return None
-
-    @staticmethod
-    def _as_float(value: object) -> float | None:
-        try:
-            return float(value) if value is not None else None
-        except (TypeError, ValueError):
-            return None
-
-    @staticmethod
-    def _timestamp(value: object) -> datetime | None:
-        if not isinstance(value, str):
-            return None
-        try:
-            return datetime.fromisoformat(value.replace("Z", "+00:00"))
-        except ValueError:
-            return None
-
-    @classmethod
-    def _model_duration(cls, log: dict) -> int | None:
-        explicit = cls._as_int(log.get("request_duration_ms"))
-        if explicit is not None:
-            return explicit
-        start, end = cls._timestamp(log.get("startTime")), cls._timestamp(log.get("endTime"))
-        return int((end - start).total_seconds() * 1000) if start and end else None
 
     async def record_tool(
         self,
