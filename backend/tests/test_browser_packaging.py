@@ -107,6 +107,11 @@ def test_compose_gives_only_api_public_egress_and_ephemeral_browser_state():
         assert "networks: [internal]" in block
         assert "edge" not in block
 
+    searxng = _service_block(compose, "searxng")
+    assert "read_only: true" in searxng and "cap_drop: [ALL]" in searxng
+    assert "@sha256:" in searxng
+    assert "SEARXNG_URL: http://searxng:8080" in api
+
     networks = compose.split("\nnetworks:\n", maxsplit=1)[1]
     assert re.search(r"(?m)^  internal:\s*\n    internal: true$", networks)
 

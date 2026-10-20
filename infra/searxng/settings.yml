@@ -1,0 +1,13 @@
+# Internal-only metasearch for browser_search. Public search pages block the
+# headless browser (CAPTCHA, 403, empty results), so the API queries SearXNG's
+# JSON endpoint instead and only reads the selected pages with the browser.
+# server.secret_key comes from SEARXNG_SECRET.
+use_default_settings: true
+
+server:
+  limiter: false
+  image_proxy: false
+
+search:
+  formats: [json]
+  safe_search: 1
