@@ -18,8 +18,8 @@ from dotenv import load_dotenv
 BACKEND_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(BACKEND_ROOT))
 load_dotenv(BACKEND_ROOT / ".env")
-os.environ["AGENT_HARNESS"] = "gemini-cli"
 os.environ["DATABASE_URL"] = "sqlite+aiosqlite:///./learning_live_smoke.db"
+os.environ["AGENT_CHECKPOINT_DATABASE_URL"] = "sqlite+aiosqlite:///./learning_live_smoke_checkpoints.db"
 os.environ["LOCAL_AUTH"] = "true"
 os.environ["SUPABASE_URL"] = ""
 os.environ["SUPABASE_PUBLISHABLE_KEY"] = ""

@@ -200,7 +200,7 @@ async def test_adaptive_loop_searches_again_only_for_a_real_coverage_gap(monkeyp
     service.browser_gateway_factory = lambda: gateway
 
     _, research = await service._browser_research(
-        FakeDb(), "run-adaptive", "gemini-cli", LearningGoal(topic="Adaptive systems", weeks=2)
+        FakeDb(), "run-adaptive", "deep-agents", LearningGoal(topic="Adaptive systems", weeks=2)
     )
 
     assert len(gateway.searches) == 5
@@ -227,7 +227,7 @@ async def test_adaptive_loop_discards_leftover_candidates_after_their_requiremen
     service.browser_gateway_factory = lambda: gateway
 
     _, research = await service._browser_research(
-        FakeDb(), "run-candidate-filter", "gemini-cli",
+        FakeDb(), "run-candidate-filter", "deep-agents",
         LearningGoal(topic="Adaptive systems", weeks=2),
     )
 
@@ -249,7 +249,7 @@ async def test_budget_exhaustion_returns_grounded_partial_research(monkeypatch):
     service.browser_gateway_factory = lambda: gateway
 
     _, research = await service._browser_research(
-        FakeDb(), "run-budget", "gemini-cli", LearningGoal(topic="Adaptive systems", weeks=2)
+        FakeDb(), "run-budget", "deep-agents", LearningGoal(topic="Adaptive systems", weeks=2)
     )
 
     assert research.stop_reason == "budget_exhausted"
@@ -343,5 +343,5 @@ async def test_zero_readable_core_evidence_uses_semantic_failure(monkeypatch):
 
     with pytest.raises(ValueError, match="No verified evidence supports the requested topic"):
         await service._browser_research(
-            FakeDb(), "run-empty", "gemini-cli", LearningGoal(topic="Adaptive systems", weeks=2)
+            FakeDb(), "run-empty", "deep-agents", LearningGoal(topic="Adaptive systems", weeks=2)
         )

@@ -32,7 +32,7 @@ export type QuizQuestion = {
 };
 export type QuizResult = { scorePercent?: number; feedback: string; passed?: boolean; recommendation?: string };
 export type SubmissionResult = { submissionId?: string; feedback: string; scorePercent?: number; status?: string; recommendation?: string };
-export type AgentHarness = "codex" | "gemini-cli" | "antigravity-cli";
+export type AgentHarness = "deep-agents";
 type ApiQuizQuestion = { id: string; prompt: string; type?: QuizQuestion["type"]; options?: string[]; choices?: string[]; explanation?: string };
 type AssignmentPrompt = { title?: string; prompt: string; deliverables?: string[]; rubric?: string[] };
 

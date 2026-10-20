@@ -7,8 +7,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.security import encrypt
 from app.harness.gateway import LiteLLMGateway
-from app.harness.providers.cli import ProviderExecution, ToolInvocationEvent
-from app.harness.providers.factory import get_runtime
+from app.harness.deep_agents import DeepAgentRuntime, ToolInvocationEvent
 from app.mcp.audit import record_tool_invocation, record_trace_event
 from app.models.database import AgentSessionRecord, TranscriptEntryRecord
 from app.schemas.learning import AgentHarness as AgentHarnessName
@@ -115,15 +114,13 @@ class AgentHarness:
                     metadata={"harness": self.harness, "raw_event": event},
                 )
 
-            raw_execution = await get_runtime(self.harness, session.agent_name).execute(
+            execution = await DeepAgentRuntime().execute(
                 prompt,
+                session_id=session_id,
+                run_id=session.agent_run_id,
+                agent_name=session.agent_name,
                 on_event=capture_harness_event,
                 gateway_api_key=gateway_api_key,
-            )
-            execution = (
-                raw_execution
-                if isinstance(raw_execution, ProviderExecution)
-                else ProviderExecution(raw_execution)
             )
             for tool_event in execution.tool_events:
                 await record_tool_invocation(

@@ -1,8 +1,11 @@
-"""Deterministic executable-level proof of the browser/Gemini learning workflow."""
+"""Deterministic end-to-end proof of the browser/Deep Agents learning workflow."""
+
+# ruff: noqa: E501
 
 from __future__ import annotations
 
 import asyncio
+import json
 import sys
 from pathlib import Path
 from uuid import uuid4
@@ -11,6 +14,7 @@ from fastapi.testclient import TestClient
 
 from app.browser.client import AgentBrowserClient
 from app.browser.gateway import BrowserGateway
+from app.harness.deep_agents import DeepAgentExecution
 from app.main import app
 from app.services.learning_service import learning_service
 
@@ -43,7 +47,7 @@ print(json.dumps(results))
     )
 
 
-def _write_fake_gemini(path: Path) -> None:
+def _write_fake_model(path: Path) -> None:
     path.write_text(
         """import json, sys
 prompt = sys.stdin.read() or sys.argv[-1]
@@ -209,7 +213,7 @@ def _headers(client: TestClient, email: str, password: str) -> dict[str, str]:
     return {"Authorization": f"Bearer {response.json()['access_token']}"}
 
 
-def test_fake_browser_and_gemini_executables_generate_complete_course(tmp_path, monkeypatch):
+def test_fake_browser_and_deep_agent_generate_complete_course(tmp_path, monkeypatch):
     class FakeLiteLLMGateway:
         async def create_trace_key(self, **_kwargs):
             return "test-session-trace-key"
@@ -219,9 +223,22 @@ def test_fake_browser_and_gemini_executables_generate_complete_course(tmp_path, 
 
     monkeypatch.setattr("app.harness.runtime.LiteLLMGateway", FakeLiteLLMGateway)
     fake_browser = tmp_path / "fake_agent_browser.py"
-    fake_gemini = tmp_path / "fake_gemini.py"
+    fake_model = tmp_path / "fake_model.py"
     _write_fake_browser(fake_browser)
-    _write_fake_gemini(fake_gemini)
+    _write_fake_model(fake_model)
+
+    class FakeDeepAgentRuntime:
+        async def execute(self, prompt, **_kwargs):
+            process = await asyncio.create_subprocess_exec(
+                sys.executable,
+                str(fake_model),
+                stdin=asyncio.subprocess.PIPE,
+                stdout=asyncio.subprocess.PIPE,
+            )
+            stdout, _ = await process.communicate(prompt.encode())
+            assert process.returncode == 0
+            envelope = json.loads(stdout)
+            return DeepAgentExecution(json.loads(envelope["response"]))
 
     gateway = BrowserGateway(
         client=AgentBrowserClient(command=[sys.executable, str(fake_browser)]),
@@ -230,7 +247,7 @@ def test_fake_browser_and_gemini_executables_generate_complete_course(tmp_path, 
     browser_result = asyncio.run(gateway.browser_read(["https://docs.example.com/source-0"]))
     assert browser_result["pages"][0]["status"] == "ok"
 
-    monkeypatch.setenv("GEMINI_CLI_COMMAND", f'"{sys.executable}" "{fake_gemini}"')
+    monkeypatch.setattr("app.harness.runtime.DeepAgentRuntime", FakeDeepAgentRuntime)
     monkeypatch.setattr(
         learning_service,
         "browser_gateway_factory",
@@ -241,12 +258,6 @@ def test_fake_browser_and_gemini_executables_generate_complete_course(tmp_path, 
     )
     with TestClient(app) as client:
         admin = _headers(client, "admin@example.com", "AdminPass123!")
-        harness = client.put(
-            "/analytics/settings/agent-harness",
-            headers=admin,
-            json={"harness": "gemini-cli"},
-        )
-        assert harness.status_code == 200, harness.text
         try:
             email = f"fake-cli-{uuid4().hex}@example.com"
             registration = client.post(
@@ -383,7 +394,4 @@ def test_fake_browser_and_gemini_executables_generate_complete_course(tmp_path, 
                 json={"lesson_id": lesson["id"], "completed": True},
             ).status_code == 404
         finally:
-            reset = client.put(
-                "/analytics/settings/agent-harness", headers=admin, json={"harness": "gemini-cli"}
-            )
-            assert reset.status_code == 200, reset.text
+            assert admin

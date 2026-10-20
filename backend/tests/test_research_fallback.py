@@ -196,7 +196,7 @@ async def test_browser_research_is_bounded_grounded_and_body_free_in_audit(monke
     session, research = await service._browser_research(
         db,
         "run-1",
-        "gemini-cli",
+        "deep-agents",
         LearningGoal(topic="Transformers", weeks=2),
     )
 
