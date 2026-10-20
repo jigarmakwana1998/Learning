@@ -1,6 +1,7 @@
 import ipaddress
 import json
 import logging
+import math
 import re
 from collections import Counter
 from datetime import datetime, timezone
@@ -14,6 +15,7 @@ from app.agents import (
     LessonWriterAgent, PlannerAgent, ResearchCoverageEvaluatorAgent,
     ResearchQueryPlannerAgent, ResearchSelectorAgent, ResearchSynthesisAgent,
 )
+from app.agents.contracts import PlannerOutput
 from app.browser.gateway import BrowserGateway
 from app.core.config import get_settings
 from app.core.database import SessionLocal
@@ -25,7 +27,7 @@ from app.models.database import (
     LessonProgressRecord, QuizSubmissionRecord, TranscriptEntryRecord, User,
 )
 from app.schemas.learning import (
-    Assessment, AssignmentSubmissionResponse, Course, CurriculumModule,
+    AssignmentSubmissionResponse, Course, CurriculumModule,
     LearningGoal, LearningProgressResponse, LearningRun, LearningRunRequest, Lesson,
     QuizQuestionFeedback, QuizSubmissionResponse, ResearchBrief, Source,
     SourceVisit,
@@ -74,14 +76,17 @@ class LearningService:
             planner_session, planner_output = await harness.start_and_run(
                 run.id, planner.name, planner.build_prompt(goal, research.model_dump())
             )
-            planner_output, writer_sessions = await self._expand_short_lessons(
-                harness, run.id, goal, research, planner_output
+            # The planner returns structure only; turn chapters into modules and
+            # sections into lesson drafts that the lesson writer expands.
+            planned = {"curriculum": self._planned_modules(goal, planner_output, research)}
+            planned, writer_sessions = await self._expand_short_lessons(
+                harness, run.id, goal, research, planned
             )
-            curriculum = self._provider_curriculum(goal, planner_output, research)
-            assessment = self._provider_assessment(goal, planner_output)
+            curriculum = self._provider_curriculum(goal, planned, research)
+            # Assessments come from a dedicated agent in a later step.
             result = LearningRun(
                 id=run.id, harness=harness_name, research=research, curriculum=curriculum,
-                course=Course(title=f"{goal.topic} learning path", modules=curriculum), assessment=assessment,
+                course=Course(title=f"{goal.topic} learning path", modules=curriculum),
                 sessions={
                     "Researcher": research_session.id,
                     "Planner": planner_session.id,
@@ -1185,6 +1190,79 @@ class LearningService:
         return research.model_copy(update={"sources": verified, "visited_sources": ledger})
 
     @classmethod
+    def _planned_modules(
+        cls,
+        goal: LearningGoal,
+        planner_output: dict,
+        research: ResearchBrief,
+    ) -> list[dict]:
+        """Validate the planner's chapter/section structure and turn it into lesson drafts.
+
+        Chapters become curriculum modules (numbered in order) and sections become
+        lessons; ids, sources, and hours are derived here rather than asked of the model.
+        """
+        try:
+            plan = PlannerOutput.model_validate(planner_output)
+        except (TypeError, ValueError) as error:
+            raise ValueError(f"Planner returned an invalid chapter structure: {error}") from error
+        if not plan.chapters:
+            raise ValueError("Planner must return at least one chapter.")
+        covered = {item.requirement_id: item for item in research.coverage if item.status == "covered"}
+        assigned: set[str] = set()
+        total_minutes = 0
+        modules = []
+        for chapter_number, chapter in enumerate(plan.chapters, start=1):
+            if len(chapter.title.strip()) < 3 or len(chapter.summary.strip()) < 20:
+                raise ValueError(f"Planner chapter {chapter_number} needs a title and a summary.")
+            if not chapter.sections:
+                raise ValueError(f"Planner chapter {chapter_number} needs at least one section.")
+            lessons = []
+            for section_number, section in enumerate(chapter.sections, start=1):
+                where = f"chapter {chapter_number} section {section_number}"
+                if len(section.title.strip()) < 3 or len(section.objective.strip()) < 12:
+                    raise ValueError(f"Planner {where} needs a title and an objective.")
+                if covered and not 1 <= len(section.coverage_ids) <= 3:
+                    raise ValueError(f"Planner {where} must map to 1-3 coverage requirements.")
+                if unknown := [item for item in section.coverage_ids if covered and item not in covered]:
+                    raise ValueError(f"Planner {where} uses coverage ids that research did not cover: {', '.join(unknown)}")
+                key_points = [point.strip() for point in section.key_points if point.strip()]
+                if not 5 <= len(key_points) <= 7 or len({point.casefold() for point in key_points}) != len(key_points):
+                    raise ValueError(f"Planner {where} needs 5-7 distinct key points.")
+                if not 15 <= section.estimated_minutes <= 120:
+                    raise ValueError(f"Planner {where} needs estimated_minutes between 15 and 120.")
+                assigned.update(section.coverage_ids)
+                total_minutes += section.estimated_minutes
+                lessons.append({
+                    "id": f"chapter-{chapter_number}-section-{section_number}",
+                    "title": section.title.strip(),
+                    "objective": section.objective.strip(),
+                    "coverage_ids": list(dict.fromkeys(section.coverage_ids)),
+                    "section_plan": key_points,
+                    "paragraphs": [],
+                    "estimated_minutes": section.estimated_minutes,
+                })
+            minutes = sum(lesson["estimated_minutes"] for lesson in lessons)
+            modules.append({
+                "week": chapter_number,  # chapter number; the field name predates chapters
+                "title": chapter.title.strip(),
+                "overview": chapter.summary.strip(),
+                "outcomes": [lesson["objective"] for lesson in lessons],
+                "coverage_ids": list(dict.fromkeys(i for lesson in lessons for i in lesson["coverage_ids"])),
+                "source_urls": [],
+                "estimated_hours": max(1, math.ceil(minutes / 60)),
+                "lessons": lessons,
+            })
+        if missing := sorted(set(covered) - assigned):
+            raise ValueError(f"Planner left covered research requirements without a section: {', '.join(missing)}")
+        budget = goal.weeks * goal.hours_per_week * 60
+        if total_minutes > budget:
+            raise ValueError(
+                f"Planner sections take {total_minutes} minutes, over the learner's {budget}-minute budget "
+                f"({goal.weeks} weeks x {goal.hours_per_week} h)."
+            )
+        return modules
+
+    @classmethod
     def _provider_curriculum(
         cls,
         goal: LearningGoal,
@@ -1200,12 +1278,8 @@ class LearningService:
         except (TypeError, ValueError) as error:
             raise ValueError("Planner returned an invalid curriculum structure.") from error
 
-        expected_weeks = set(range(1, goal.weeks + 1))
-        actual_weeks = [module.week for module in modules]
-        if len(actual_weeks) != goal.weeks or set(actual_weeks) != expected_weeks:
-            raise ValueError(
-                f"Planner must return exactly one module for each week 1 through {goal.weeks}."
-            )
+        if not modules:
+            raise ValueError("Planner must return at least one chapter.")
 
         verified_sources = {source.url: source for source in research.sources}
         verified_urls = set(verified_sources)
@@ -1230,13 +1304,8 @@ class LearningService:
                 coverage_by_id,
                 f"module week {module.week}",
             ) if coverage_by_id else []
-            module_urls = cls._grounded_source_urls(
-                module.source_urls, verified_urls, f"module week {module.week}"
-            )
-            if len(module.lessons) < 2:
-                raise ValueError(
-                    f"Planner module week {module.week} must contain at least two complete lessons."
-                )
+            if not module.lessons:
+                raise ValueError(f"Planner chapter {module.week} must contain at least one section.")
             lessons: list[Lesson] = []
             for lesson in module.lessons:
                 if lesson.id in seen_lesson_ids:
@@ -1312,10 +1381,12 @@ class LearningService:
                     f"Planner module week {module.week} coverage_ids must equal the union of its lessons."
                 )
             course_coverage_ids.update(lesson_coverage_union)
-            if sum(lesson.estimated_minutes for lesson in lessons) > goal.hours_per_week * 60:
-                raise ValueError(
-                    f"Planner module week {module.week} lesson time exceeds the learner's weekly-hour budget."
-                )
+            # A chapter's sources are the ones its sections actually cite.
+            module_urls = cls._grounded_source_urls(
+                list(dict.fromkeys(url for lesson in lessons for url in lesson.source_urls)),
+                verified_urls,
+                f"chapter {module.week}",
+            )
             grounded.append(
                 module.model_copy(
                     update={
@@ -1349,80 +1420,11 @@ class LearningService:
             )
 
     @staticmethod
-    def _provider_assessment(goal: LearningGoal, planner_output: dict) -> Assessment:
-        """Validate provider-authored quizzes and practical work without synthetic padding."""
-        payload = planner_output.get("assessment") if isinstance(planner_output, dict) else None
-        if not isinstance(payload, dict):
-            raise ValueError("Planner must return an assessment object.")  # noqa: TRY004
-        payload = json.loads(json.dumps(payload))
-        assignment = payload.get("assignment")
-        if isinstance(assignment, dict) and isinstance(assignment.get("rubric"), dict):
-            assignment["rubric"] = [
-                f"{label}: {criterion}" for label, criterion in assignment["rubric"].items()
-            ]
-        if isinstance(payload.get("project"), dict):
-            project = payload["project"]
-            payload["project"] = ". ".join(
-                str(value).strip().rstrip(".")
-                for value in project.values()
-                if isinstance(value, str) and value.strip()
-            ) + "."
-        try:
-            assessment = Assessment.model_validate(payload)
-        except (TypeError, ValueError) as error:
-            raise ValueError("Planner returned an invalid assessment structure.") from error
-
-        questions = assessment.quiz_items or assessment.quiz
-        minimum_questions = goal.weeks * 2
-        maximum_questions = goal.weeks * 5
-        if not minimum_questions <= len(questions) <= maximum_questions:
-            raise ValueError(
-                f"Planner must return 2-5 quiz questions per week ({minimum_questions}-{maximum_questions} total)."
-            )
-
-        expected_weeks = set(range(1, goal.weeks + 1))
-        questions_per_week = Counter(question.module_week for question in questions)
-        if set(questions_per_week) != expected_weeks or any(
-            not 2 <= questions_per_week[week] <= 5 for week in expected_weeks
-        ):
-            raise ValueError("Planner must return 2-5 quiz questions for every requested week.")
-
-        seen_ids: set[str] = set()
-        for question in questions:
-            choices = [choice.strip() for choice in question.choices]
-            if not question.id.strip() or question.id in seen_ids:
-                raise ValueError("Planner quiz question ids must be non-empty and unique.")
-            seen_ids.add(question.id)
-            if len(question.prompt.strip()) < 20:
-                raise ValueError(f"Planner quiz question {question.id} needs a complete prompt.")
-            if len(set(choices)) != len(choices) or any(len(choice) < 2 for choice in choices):
-                raise ValueError(f"Planner quiz question {question.id} needs distinct, complete choices.")
-            if question.correct_answer not in question.choices:
-                raise ValueError(
-                    f"Planner quiz question {question.id} must include correct_answer in choices."
-                )
-            if not question.explanation or len(question.explanation.strip()) < 20:
-                raise ValueError(
-                    f"Planner quiz question {question.id} needs a substantive answer explanation."
-                )
-
-        if any(len(item.strip()) < 10 for item in assessment.assignment.deliverables):
-            raise ValueError("Planner assignment deliverables must be concrete.")
-        if any(len(item.strip()) < 10 for item in assessment.assignment.rubric):
-            raise ValueError("Planner assignment rubric criteria must be observable.")
-
-        return assessment.model_copy(update={"quiz": questions, "quiz_items": questions})
-
-    @staticmethod
     def _validate_module_content(module: CurriculumModule, goal: LearningGoal) -> None:
-        if len(module.title.strip()) < 3 or len(module.overview.strip()) < 40:
-            raise ValueError(f"Planner module week {module.week} needs a complete title and overview.")
-        if len(module.outcomes) < 2 or any(len(outcome.strip()) < 10 for outcome in module.outcomes):
-            raise ValueError(f"Planner module week {module.week} needs at least two concrete outcomes.")
-        if module.estimated_hours > goal.hours_per_week:
-            raise ValueError(
-                f"Planner module week {module.week} exceeds the learner's weekly-hour budget."
-            )
+        if len(module.title.strip()) < 3 or len(module.overview.strip()) < 20:
+            raise ValueError(f"Planner chapter {module.week} needs a complete title and summary.")
+        if not module.outcomes or any(len(outcome.strip()) < 10 for outcome in module.outcomes):
+            raise ValueError(f"Planner chapter {module.week} needs concrete section objectives.")
 
     @classmethod
     def _grounded_source_urls(
@@ -1467,7 +1469,6 @@ class LearningService:
         fields = {
             "title": (lesson.title, 3),
             "objective": (lesson.objective, 12),
-            "practice": (lesson.practice, 20),
         }
         for name, (value, minimum) in fields.items():
             if not isinstance(value, str) or len(value.strip()) < minimum:
@@ -1582,6 +1583,8 @@ class LearningService:
     @staticmethod
     def public_learning_run(run: LearningRun) -> LearningRun:
         """Never reveal answer keys before a learner has submitted the quiz."""
+        if run.assessment is None:
+            return run
         quiz_items = [item.model_copy(update={"correct_answer": None, "explanation": None}) for item in run.assessment.quiz_items]
         legacy_quiz = [item.model_copy(update={"correct_answer": None, "explanation": None}) for item in run.assessment.quiz]
         assessment = run.assessment.model_copy(update={"quiz_items": quiz_items, "quiz": legacy_quiz})
@@ -1589,6 +1592,8 @@ class LearningService:
 
     async def submit_quiz(self, db: AsyncSession, user: User, run: AgentRun, answers: list[tuple[str, str]]) -> QuizSubmissionResponse:
         course = self.learning_run(run)
+        if course.assessment is None:
+            raise ValueError("This course has no quiz yet; assessments are generated in a later step.")
         questions = course.assessment.quiz_items or course.assessment.quiz
         by_id = {question.id: question for question in questions}
         supplied = dict(answers)
@@ -1615,6 +1620,8 @@ class LearningService:
 
     async def submit_work(self, db: AsyncSession, user: User, run: AgentRun, kind: str, content: str) -> AssignmentSubmissionResponse:
         course = self.learning_run(run)
+        if course.assessment is None:
+            raise ValueError("This course has no assignment yet; assessments are generated in a later step.")
         expected = course.assessment.assignment.deliverables if kind == "assignment" else ["A working outcome", "A short decision log", "Validation evidence", "A reflection"]
         word_count = len(content.split())
         status = "accepted" if word_count >= 120 else "needs_revision"

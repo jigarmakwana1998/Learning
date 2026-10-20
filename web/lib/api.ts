@@ -43,7 +43,8 @@ export type LearningRun = {
   // `course` is the richer v2 response. `curriculum` remains supported for existing API responses.
   course?: { title?: string; modules: ApiModule[] };
   curriculum: Array<{ id?: string; week: number; title: string; outcomes: string[]; source_urls: string[]; lessons?: Array<Record<string, unknown>> }>;
-  assessment: { quiz: Array<string | ApiQuizQuestion>; quiz_items?: ApiQuizQuestion[]; assignment: string | AssignmentPrompt; project: string };
+  // Absent until the assessment step generates quizzes and assignments.
+  assessment?: { quiz: Array<string | ApiQuizQuestion>; quiz_items?: ApiQuizQuestion[]; assignment: string | AssignmentPrompt; project: string } | null;
   sessions: Record<string, string>;
 };
 
@@ -113,11 +114,13 @@ export type TraceRun = {
 export type TraceRunListItem = Omit<TraceRun, "sessions" | "events">;
 
 export function quizQuestions(run: LearningRun): QuizQuestion[] {
+  if (!run.assessment) return [];
   if (run.assessment.quiz_items?.length) return run.assessment.quiz_items.map((item) => ({ id: item.id, prompt: item.prompt, type: item.type ?? ((item.options ?? item.choices)?.length ? "multiple_choice" : "short_answer"), options: item.options ?? item.choices, explanation: item.explanation }));
   return run.assessment.quiz.map((item, index) => typeof item === "string" ? ({ id: `quiz-${index + 1}`, prompt: item, type: "short_answer" }) : ({ id: item.id, prompt: item.prompt, type: item.type ?? ((item.options ?? item.choices)?.length ? "multiple_choice" : "short_answer"), options: item.options ?? item.choices }));
 }
 
 export function workPrompt(run: LearningRun, kind: "assignment" | "project") {
+  if (!run.assessment) return "";
   if (kind === "project") return run.assessment.project;
   const assignment = run.assessment.assignment;
   if (typeof assignment === "string") return assignment;

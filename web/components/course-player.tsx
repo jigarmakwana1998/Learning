@@ -102,7 +102,7 @@ export function CoursePlayer({ run, token }: { run: LearningRun; token: string }
             <ol className="grid gap-1">
               {modules.map((module) => (
                 <li key={module.id}>
-                  <p className="px-2 pb-1 pt-3 text-xs font-semibold text-muted-foreground">Module {module.week}: {module.title}</p>
+                  <p className="px-2 pb-1 pt-3 text-xs font-semibold text-muted-foreground">Chapter {module.week}: {module.title}</p>
                   {module.lessons.map((item, index) => (
                     <button key={item.id} type="button" onClick={() => chooseLesson(item.id)} aria-current={item.id === lesson.id ? "step" : undefined} className={`flex w-full items-center gap-2 rounded-lg px-2 py-2 text-left text-sm transition-colors active:scale-[0.98] ${item.id === lesson.id ? "bg-card font-semibold shadow-sm" : "hover:bg-card/70"}`}>
                       <span className="shrink-0 text-primary">{completed.has(item.id) ? <CheckCircle2 size={17} aria-label="Completed" /> : <Circle size={17} aria-hidden="true" />}</span>
@@ -151,7 +151,7 @@ function LessonView({ lesson, module, sources, completed, saving, saveError, onT
   const sourcesByUrl = new Map(sources.map((source) => [source.url, source]));
   return (
     <article className="pt-6">
-      <p className="text-sm font-semibold text-primary">Module {module?.week} / {lesson.estimatedMinutes ?? 30} min</p>
+      <p className="text-sm font-semibold text-primary">Chapter {module?.week} / {lesson.estimatedMinutes ?? 30} min</p>
       <h3 className="mt-1 text-3xl font-bold tracking-tight">{lesson.title}</h3>
       {lesson.summary && <p className="mt-3 max-w-[72ch] text-lg leading-8 text-muted-foreground">{lesson.summary}</p>}
       <div className="mt-8 grid max-w-[76ch] gap-7">
@@ -298,6 +298,7 @@ function WorkView({ run, token }: { run: LearningRun; token: string }) {
   const [result, setResult] = useState<SubmissionResult>();
   const prompt = workPrompt(run, kind);
   const mutation = useMutation({ mutationFn: () => submitWork(run.id, kind, response, token), onSuccess: setResult });
+  if (!run.assessment) return <section className="pt-6"><h3 className="text-2xl font-bold">Put it into practice</h3><p className="mt-2 text-muted-foreground">Assignments and projects for this course are added in a later step.</p></section>;
   return <section className="pt-6"><h3 className="text-2xl font-bold">Put it into practice</h3><div className="mt-5 flex gap-2"><Button variant={kind === "assignment" ? "default" : "secondary"} onClick={() => { setKind("assignment"); setResult(undefined); }}>Assignment</Button><Button variant={kind === "project" ? "default" : "secondary"} onClick={() => { setKind("project"); setResult(undefined); }}>Project</Button></div><Card className="mt-5"><p className="font-semibold text-primary">{kind}</p><p className="mt-2 leading-7">{prompt}</p></Card><label className="mt-5 grid gap-2 font-semibold" htmlFor="submission">Your {kind}<textarea id="submission" className="min-h-40 rounded-xl border bg-card p-3 text-base font-normal leading-6" value={response} onChange={(event) => setResponse(event.target.value)} placeholder="Describe your approach, paste your work, or share a link and the key decisions you made..." /></label><div className="mt-5 flex flex-wrap gap-3"><Button onClick={() => mutation.mutate()} disabled={mutation.isPending || response.trim().length < 20} className="gap-2">{mutation.isPending ? <LoaderCircle className="animate-spin" size={17} /> : <Send size={17} />}Submit {kind}</Button><span className="self-center text-sm text-muted-foreground">At least 20 characters</span></div>{mutation.error && <p className="mt-3 text-sm text-red-700 dark:text-red-300" role="alert">{mutation.error instanceof Error ? mutation.error.message : "Your work could not be submitted."}</p>}{result && <ResultCard result={result} />}</section>;
 }
 
