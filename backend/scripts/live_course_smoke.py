@@ -10,8 +10,6 @@ import json
 import os
 import sys
 from pathlib import Path
-from uuid import uuid4
-
 from dotenv import load_dotenv
 
 
@@ -20,9 +18,6 @@ sys.path.insert(0, str(BACKEND_ROOT))
 load_dotenv(BACKEND_ROOT / ".env")
 os.environ["DATABASE_URL"] = "sqlite+aiosqlite:///./learning_live_smoke.db"
 os.environ["AGENT_CHECKPOINT_DATABASE_URL"] = "sqlite+aiosqlite:///./learning_live_smoke_checkpoints.db"
-os.environ["LOCAL_AUTH"] = "true"
-os.environ["SUPABASE_URL"] = ""
-os.environ["SUPABASE_PUBLISHABLE_KEY"] = ""
 
 from fastapi.testclient import TestClient  # noqa: E402
 
@@ -31,17 +26,17 @@ from app.main import app  # noqa: E402
 
 def main() -> None:
     topic = os.getenv("LIVE_SMOKE_TOPIC", "Attention layers in large language models")
-    email = f"live-smoke-{uuid4().hex}@example.com"
-    password = "LiveSmokePass123!"
+    email = os.environ["LIVE_SMOKE_EMAIL"]
+    password = os.environ["LIVE_SMOKE_PASSWORD"]
 
     with TestClient(app) as client:
-        registration = client.post(
-            "/auth/register",
+        login = client.post(
+            "/auth/login",
             json={"email": email, "password": password},
         )
-        registration.raise_for_status()
+        login.raise_for_status()
         headers = {
-            "Authorization": f"Bearer {registration.json()['access_token']}"
+            "Authorization": f"Bearer {login.json()['access_token']}"
         }
         response = client.post(
             "/learning-runs",

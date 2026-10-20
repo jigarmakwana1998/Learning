@@ -11,7 +11,9 @@ from app.models.database import AgentRun, AgentSessionRecord, AgentTraceEvent, L
 def _auth(client: TestClient) -> dict[str, str]:
     client.post("/auth/register", json={"email": "trace@example.com", "password": "LearnerPass123!"})
     token = client.post("/auth/login", json={"email": "trace@example.com", "password": "LearnerPass123!"}).json()["access_token"]
-    return {"Authorization": f"Bearer {token}"}
+    headers = {"Authorization": f"Bearer {token}"}
+    assert client.get("/auth/me", headers=headers).status_code == 200
+    return headers
 
 
 async def _seed_trace() -> str:

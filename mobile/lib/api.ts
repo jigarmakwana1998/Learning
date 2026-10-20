@@ -1,4 +1,4 @@
-import { supabase } from "@/lib/supabase";
+import { clearToken, getToken, setToken } from "@/lib/token-store";
 
 export type User = { id: string; email: string; role: "learner" | "admin" };
 export type Source = { title: string; url: string; kind: string; rationale: string; key_points?: string[] };
@@ -20,25 +20,26 @@ export type LearningRunTrace = { run_id: string; sessions: Array<{ id: string; a
 const API_URL = process.env.EXPO_PUBLIC_API_URL ?? "http://127.0.0.1:8000";
 
 async function request<T>(path: string, options: RequestInit = {}, authenticated = true): Promise<T> {
-  const { data: { session } } = authenticated ? await supabase.auth.getSession() : { data: { session: null } };
-  const token = session?.access_token;
+  const token = authenticated ? await getToken() : null;
   const response = await fetch(`${API_URL}${path}`, { ...options, headers: { "Content-Type": "application/json", ...(token ? { Authorization: `Bearer ${token}` } : {}), ...options.headers } });
   if (!response.ok) throw new Error((await response.json().catch(() => null))?.detail ?? "Request failed");
   return response.json() as Promise<T>;
 }
 
 async function authenticate(mode: "login" | "register", email: string, password: string): Promise<User> {
-  const result = mode === "login"
-    ? await supabase.auth.signInWithPassword({ email, password })
-    : await supabase.auth.signUp({ email, password });
-  if (result.error) throw result.error;
-  if (!result.data.session) throw new Error("Check your inbox to confirm your email, then sign in.");
+  const result = await request<{ access_token: string | null; message?: string | null }>(
+    `/auth/${mode}`,
+    { method: "POST", body: JSON.stringify({ email, password }) },
+    false,
+  );
+  if (!result.access_token) throw new Error(result.message ?? "Check your inbox to confirm your email, then sign in.");
+  await setToken(result.access_token);
   return getMe();
 }
 
 export const login = (email: string, password: string) => authenticate("login", email, password);
 export const register = (email: string, password: string) => authenticate("register", email, password);
-export const logout = () => supabase.auth.signOut();
+export const logout = clearToken;
 export const getMe = () => request<User>("/auth/me");
 export const createLearningRun = (topic: string, hoursPerWeek: number) => request<LearningRun>("/learning-runs", { method: "POST", body: JSON.stringify({ topic, hours_per_week: hoursPerWeek, weeks: 4, level: "beginner" }) });
 export const getOverview = () => request<AnalyticsOverview>("/analytics/overview");

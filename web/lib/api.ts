@@ -138,8 +138,9 @@ async function request<T>(path: string, init: RequestInit = {}, token?: string):
   return response.json() as Promise<T>;
 }
 
-export const login = (email: string, password: string) => request<{ access_token: string; role: User["role"] }>("/auth/login", { method: "POST", body: JSON.stringify({ email, password }) });
-export const register = (email: string, password: string) => request<{ access_token: string; role: User["role"] }>("/auth/register", { method: "POST", body: JSON.stringify({ email, password }) });
+export type AuthResult = { access_token: string | null; role: User["role"]; message?: string | null };
+export const login = (email: string, password: string) => request<AuthResult>("/auth/login", { method: "POST", body: JSON.stringify({ email, password }) });
+export const register = (email: string, password: string) => request<AuthResult>("/auth/register", { method: "POST", body: JSON.stringify({ email, password }) });
 export const getMe = (token: string) => request<User>("/auth/me", {}, token);
 export const createLearningRun = (intent: TopicIntent, token: string) => request<LearningRun>("/learning-runs", { method: "POST", body: JSON.stringify({ topic: intent.topic, level: intent.level, hours_per_week: intent.hoursPerWeek, weeks: intent.weeks }) }, token);
 export const getLearningRunTrace = (runId: string, token: string) => request<AgentTrace>(`/learning-runs/${runId}/trace`, {}, token);
