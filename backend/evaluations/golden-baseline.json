@@ -4,7 +4,7 @@
   "required_agent_output_terms": {
     "query_planner": ["coverage_requirements", "5-10", "every requirement", "exact topic"],
     "researcher": ["structured", "sources", "url", "coverage_evidence"],
-    "planner": ["chapters", "sections", "coverage_ids", "key_points", "5-7", "do not write lesson text"],
+    "planner": ["chapters", "sections", "coverage_ids", "key_points"],
     "lesson_writer": ["structured", "coverage_targets", "1,200-1,800", "supported_by"]
   }
 }
