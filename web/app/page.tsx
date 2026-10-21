@@ -9,19 +9,21 @@ import { IntakeForm } from "@/components/intake-form";
 import { ResearchResults } from "@/components/research-results";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
-import { createLearningRun, getMe, type TopicIntent } from "@/lib/api";
+import { getMe, getResearchRun, startResearchRun, type TopicIntent } from "@/lib/api";
 
 const tokenKey = "learning-coach-token";
 
 export default function Home() {
   const [token, setToken] = useState<string>();
   const [ready, setReady] = useState(false);
-  const [run, setRun] = useState<Awaited<ReturnType<typeof createLearningRun>>>();
+  const [runId, setRunId] = useState<string>();
   useEffect(() => { setToken(sessionStorage.getItem(tokenKey) ?? undefined); setReady(true); }, []);
   const userQuery = useQuery({ queryKey: ["me", token], queryFn: () => getMe(token!), enabled: Boolean(token), retry: false });
-  const generation = useMutation({ mutationFn: (intent: TopicIntent) => createLearningRun(intent, token!), onSuccess: setRun });
+  const generation = useMutation({ mutationFn: (intent: TopicIntent) => startResearchRun(intent, token!), onSuccess: ({ id }) => setRunId(id) });
+  // Poll while the agent works so coverage and pages appear as they arrive.
+  const run = useQuery({ queryKey: ["research-run", runId, token], queryFn: () => getResearchRun(runId!, token!), enabled: Boolean(token && runId), refetchInterval: (query) => (query.state.data?.status === "running" || !query.state.data ? 2000 : false) });
 
-  function signOut() { sessionStorage.removeItem(tokenKey); setToken(undefined); setRun(undefined); }
+  function signOut() { sessionStorage.removeItem(tokenKey); setToken(undefined); setRunId(undefined); }
   if (!ready) return <main className="grid min-h-screen place-items-center text-muted-foreground" aria-live="polite">Loading Learning Coach...</main>;
   if (!token) return <PublicLanding onAuthenticated={setToken} />;
   if (userQuery.isError) return <PublicLanding error="Your session has expired. Please sign in again." onAuthenticated={setToken} />;
@@ -31,7 +33,8 @@ export default function Home() {
     <div className="grid gap-8">
       {generation.error && <p role="alert" className="rounded-xl border border-red-200 bg-red-50 p-4 text-red-800 dark:border-red-900 dark:bg-red-950 dark:text-red-200">{generation.error instanceof Error ? generation.error.message : "We could not research that topic. Please try again."}</p>}
       <IntakeForm onSubmit={generation.mutate} pending={generation.isPending} />
-      {run && <ResearchResults run={run} />}
+      {run.data?.status === "failed" && <p role="alert" className="rounded-xl border border-red-200 bg-red-50 p-4 text-red-800 dark:border-red-900 dark:bg-red-950 dark:text-red-200">{run.data.error ?? "Research failed. Please try again."}</p>}
+      {run.data && <ResearchResults run={run.data} />}
     </div>
   </AppShell>;
 }
