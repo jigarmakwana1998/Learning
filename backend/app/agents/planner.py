@@ -37,6 +37,6 @@ class ChapterPlannerAgent(LearningAgent):
             "text, quizzes, assignments, or citations. Do not number section titles. Give each section the coverage_ids "
             "it teaches, chosen from context.chapter.coverage_ids, its key_points (the concepts, mechanism steps, worked "
             "example, and limitation the lesson writer must teach, one paragraph each) drawn from context.research, and "
-            "estimated_minutes. Together the chapter's sections must teach every one of its coverage_ids and fit within "
-            "context.remaining_minutes."
+            "estimated_minutes. Together the chapter's sections must teach every one of its coverage_ids; aim to fit them "
+            "within context.chapter_minutes, this chapter's share of the learner's time."
         )

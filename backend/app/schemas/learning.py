@@ -124,6 +124,8 @@ class Assessment(BaseModel):
 class Course(BaseModel):
     title: str
     modules: list[CurriculumModule]
+    # Non-blocking notes about the plan, e.g. a time-budget overrun.
+    warnings: list[str] = Field(default_factory=list)
 
 
 class LearningRun(BaseModel):

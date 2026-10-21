@@ -83,7 +83,11 @@ class LearningService:
             # Assessments come from a dedicated agent in a later step.
             result = LearningRun(
                 id=run.id, harness=harness_name, research=research, curriculum=curriculum,
-                course=Course(title=f"{goal.topic} learning path", modules=curriculum),
+                course=Course(
+                    title=f"{goal.topic} learning path",
+                    modules=curriculum,
+                    warnings=self._time_budget_warnings(goal, curriculum),
+                ),
                 sessions={
                     "Researcher": research_session.id,
                     **planner_sessions,
@@ -121,6 +125,9 @@ class LearningService:
         remaining_minutes = goal.weeks * goal.hours_per_week * 60
         chapters: list[dict] = []
         for number, chapter in enumerate(outline["chapters"], start=1):
+            # Fair share of what is left, so early chapters cannot starve later ones.
+            chapters_left = len(outline["chapters"]) - number + 1
+            chapter_minutes = max(remaining_minutes, 0) // chapters_left
             targets = [coverage_by_id[i] for i in chapter["coverage_ids"] if i in coverage_by_id]
             supporting_urls = {url for target in targets for url in target.supported_by}
             role = f"{chapter_planner.name}{number}"
@@ -147,7 +154,7 @@ class LearningService:
                                 if source.url in supporting_urls
                             ],
                         },
-                        "remaining_minutes": remaining_minutes,
+                        "chapter_minutes": chapter_minutes,
                     },
                 ),
             )
@@ -858,7 +865,6 @@ class LearningService:
             raise ValueError(f"Planner returned an invalid chapter structure: {error}") from error
         covered = {item.requirement_id for item in research.coverage if item.status == "covered"}
         assigned: set[str] = set()
-        total_minutes = 0
         modules = []
         for chapter_number, chapter in enumerate(plan.chapters, start=1):
             lessons = []
@@ -869,7 +875,6 @@ class LearningService:
                         f"that research did not cover: {', '.join(unknown)}"
                     )
                 assigned.update(section.coverage_ids)
-                total_minutes += section.estimated_minutes
                 lessons.append({
                     "id": f"chapter-{chapter_number}-section-{section_number}",
                     "title": section.title,
@@ -893,13 +898,19 @@ class LearningService:
             })
         if missing := sorted(covered - assigned):
             raise ValueError(f"Planner left covered research requirements without a section: {', '.join(missing)}")
-        budget = goal.weeks * goal.hours_per_week * 60
-        if total_minutes > budget:
-            raise ValueError(
-                f"Planner sections take {total_minutes} minutes, over the learner's {budget}-minute budget "
-                f"({goal.weeks} weeks x {goal.hours_per_week} h)."
-            )
         return modules
+
+    @staticmethod
+    def _time_budget_warnings(goal: LearningGoal, modules: list[CurriculumModule]) -> list[str]:
+        """Soft limit: section minutes are model estimates, so an overrun is a warning, never a failure."""
+        budget = goal.weeks * goal.hours_per_week * 60
+        planned = sum(lesson.estimated_minutes for module in modules for lesson in module.lessons)
+        if planned <= budget:
+            return []
+        return [
+            f"Planned sections total {planned} minutes, over the {budget}-minute budget "
+            f"({goal.weeks} weeks x {goal.hours_per_week} h)."
+        ]
 
     @classmethod
     def _provider_curriculum(
