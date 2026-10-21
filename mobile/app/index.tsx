@@ -11,7 +11,6 @@ import {
   TextInput,
   View,
 } from "react-native";
-import { Link } from "expo-router";
 
 import {
   createLearningRun,
@@ -26,7 +25,7 @@ import {
   User,
 } from "@/lib/api";
 
-type CourseView = "lesson" | "sources" | "trace";
+type CourseView = "coverage" | "sources" | "trace";
 
 function openPublicUrl(url: string) {
   if (!url.startsWith("https://")) return;
@@ -41,7 +40,7 @@ export default function HomeScreen() {
   const [user, setUser] = useState<User | null>(null);
   const [loading, setLoading] = useState(false);
   const [plan, setPlan] = useState<LearningRun | null>(null);
-  const [courseView, setCourseView] = useState<CourseView>("lesson");
+  const [courseView, setCourseView] = useState<CourseView>("coverage");
   const [trace, setTrace] = useState<LearningRunTrace | null>(null);
   const [traceError, setTraceError] = useState("");
 
@@ -72,11 +71,11 @@ export default function HomeScreen() {
     try {
       const nextPlan = await createLearningRun(topic.trim(), Number(hours) || 5);
       setPlan(nextPlan);
-      setCourseView("lesson");
+      setCourseView("coverage");
       setTrace(null);
       setTraceError("");
     } catch (error) {
-      Alert.alert("Could not create course", error instanceof Error ? error.message : "Please try again.");
+      Alert.alert("Could not research this topic", error instanceof Error ? error.message : "Please try again.");
     } finally {
       setLoading(false);
     }
@@ -101,7 +100,7 @@ export default function HomeScreen() {
 
         {!user ? (
           <View style={styles.card}>
-            <Text style={styles.cardTitle}>Sign in to build your course</Text>
+            <Text style={styles.cardTitle}>Sign in to research a topic</Text>
             <TextInput value={email} onChangeText={setEmail} placeholder="Email" autoCapitalize="none" keyboardType="email-address" style={styles.input} />
             <TextInput value={password} onChangeText={setPassword} placeholder="Password (8+ characters)" secureTextEntry style={styles.input} />
             <Pressable accessibilityRole="button" onPress={() => signIn("login")} style={({ pressed }) => [styles.primaryButton, pressed && styles.pressed]}>
@@ -117,25 +116,24 @@ export default function HomeScreen() {
               <Text style={styles.signedIn} numberOfLines={1}>Signed in as {user.email}</Text>
               <Pressable accessibilityRole="button" onPress={() => logout().then(() => setUser(null))} style={styles.textButton}><Text style={styles.link}>Sign out</Text></Pressable>
             </View>
-            {user.role === "admin" && <Link href="/admin" style={styles.adminLink}>Open admin analytics</Link>}
-            <Text style={styles.subtitle}>Name the subject. The system will discover sources, read and filter them, then write a cited course with quizzes and an assignment.</Text>
+            <Text style={styles.subtitle}>Name the subject. The research agent maps what it involves and finds pages that teach each part, reading every page first.</Text>
             <TextInput value={topic} onChangeText={setTopic} placeholder="e.g. Attention layers in large language models" style={styles.input} />
             <Text style={styles.label}>Study time each week</Text>
             <TextInput value={hours} onChangeText={setHours} keyboardType="number-pad" style={styles.input} />
             <Pressable accessibilityRole="button" onPress={generatePlan} disabled={loading} style={({ pressed }) => [styles.primaryButton, pressed && styles.pressed, loading && styles.disabled]}>
-              {loading ? <ActivityIndicator color="#fff" /> : <Text style={styles.primaryButtonText}>Research and create my course</Text>}
+              {loading ? <ActivityIndicator color="#fff" /> : <Text style={styles.primaryButtonText}>Research this topic</Text>}
             </Pressable>
 
             {plan && (
               <View style={styles.courseShell}>
                 <Text style={styles.cardTitle}>{plan.research.topic}</Text>
                 <View accessibilityRole="tablist" style={styles.tabs}>
-                  <Tab active={courseView === "lesson"} label="Lessons" onPress={() => setCourseView("lesson")} />
+                  <Tab active={courseView === "coverage"} label="Coverage" onPress={() => setCourseView("coverage")} />
                   <Tab active={courseView === "sources"} label="Sources" onPress={() => setCourseView("sources")} />
                   <Tab active={courseView === "trace"} label="Agent trace" onPress={showTrace} />
                 </View>
 
-                {courseView === "lesson" && <LessonList plan={plan} sourcesByUrl={sourcesByUrl} />}
+                {courseView === "coverage" && <CoverageList plan={plan} sourcesByUrl={sourcesByUrl} />}
                 {courseView === "sources" && <SourceLedger plan={plan} />}
                 {courseView === "trace" && <TracePanel trace={trace} error={traceError} onRetry={showTrace} />}
               </View>
@@ -155,51 +153,24 @@ function Tab({ active, label, onPress }: { active: boolean; label: string; onPre
   );
 }
 
-function LessonList({ plan, sourcesByUrl }: { plan: LearningRun; sourcesByUrl: Map<string, Source> }) {
+function CoverageList({ plan, sourcesByUrl }: { plan: LearningRun; sourcesByUrl: Map<string, Source> }) {
   return (
     <View style={styles.sectionStack}>
-      {plan.curriculum.map((module) => (
-        <View key={module.week} style={styles.module}>
-          <Text style={styles.kicker}>CHAPTER {module.week}</Text>
-          <Text style={styles.sectionTitle}>{module.title}</Text>
-          {module.overview ? <Text style={styles.bodyMuted}>{module.overview}</Text> : null}
-          {(module.lessons ?? []).map((lesson) => (
-            <View key={lesson.id} style={styles.lesson}>
-              <Text style={styles.lessonTitle}>{lesson.title}</Text>
-              <Text style={styles.objective}>{lesson.objective}</Text>
-              {(lesson.paragraphs ?? []).map((paragraph, index) => (
-                <View key={`${lesson.id}-${index}`} style={styles.paragraph}>
-                  <Text selectable style={styles.body}>{paragraph.text}</Text>
-                  <Text style={styles.citationLabel}>Sources for this paragraph</Text>
-                  {paragraph.source_urls.map((url) => (
-                    <Pressable key={url} accessibilityRole="link" onPress={() => openPublicUrl(url)} style={({ pressed }) => [styles.sourceLink, pressed && styles.pressed]}>
-                      <Text style={styles.sourceLinkText}>{sourcesByUrl.get(url)?.title ?? url}</Text>
-                      <Text style={styles.urlText} numberOfLines={2}>{url}</Text>
-                    </Pressable>
-                  ))}
-                </View>
-              ))}
-              {lesson.practice ? (
-                <View style={styles.practice}>
-                  <Text style={styles.practiceTitle}>Practice</Text>
-                  <Text style={styles.body}>{lesson.practice}</Text>
-                </View>
-              ) : null}
+      {(plan.research.coverage ?? []).map((item) => (
+        <View key={item.requirement_id} style={styles.module}>
+          <Text style={styles.kicker}>{item.status.toUpperCase()}</Text>
+          <Text style={styles.sectionTitle}>{item.question}</Text>
+          {item.supported_by.map((url) => sourcesByUrl.get(url)).filter((source): source is Source => Boolean(source)).map((source) => (
+            <View key={source.url} style={styles.lesson}>
+              <Pressable accessibilityRole="link" onPress={() => openPublicUrl(source.url)} style={({ pressed }) => [styles.sourceLink, pressed && styles.pressed]}>
+                <Text style={styles.sourceLinkText}>{source.title}</Text>
+                <Text style={styles.urlText} numberOfLines={2}>{source.url}</Text>
+              </Pressable>
+              {(source.key_points ?? []).map((point) => <Text key={point} style={styles.bullet}>• {point}</Text>)}
             </View>
           ))}
         </View>
       ))}
-      {plan.assessment ? <View style={styles.practice}>
-        <Text style={styles.practiceTitle}>Assignment</Text>
-        <Text style={styles.lessonTitle}>{plan.assessment.assignment.title}</Text>
-        <Text style={styles.body}>{plan.assessment.assignment.prompt}</Text>
-        <Text style={styles.citationLabel}>Deliverables</Text>
-        {plan.assessment.assignment.deliverables.map((item) => <Text key={item} style={styles.bullet}>• {item}</Text>)}
-        <Text style={styles.citationLabel}>Rubric</Text>
-        {plan.assessment.assignment.rubric.map((item) => <Text key={item} style={styles.bullet}>• {item}</Text>)}
-        <Text style={styles.practiceTitle}>Project</Text>
-        <Text style={styles.body}>{plan.assessment.project}</Text>
-      </View> : null}
     </View>
   );
 }
@@ -211,8 +182,8 @@ function SourceLedger({ plan }: { plan: LearningRun }) {
   return (
     <View style={styles.sectionStack}>
       <View>
-        <Text style={styles.sectionTitle}>Sources used in the course</Text>
-        <Text style={styles.bodyMuted}>{plan.research.sources.length} verified source{plan.research.sources.length === 1 ? "" : "s"} grounded the course after reading {visits.filter((item) => item.status === "read").length} pages.</Text>
+        <Text style={styles.sectionTitle}>Sources read</Text>
+        <Text style={styles.bodyMuted}>{plan.research.sources.length} verified source{plan.research.sources.length === 1 ? "" : "s"} grounded the research after reading {visits.filter((item) => item.status === "read").length} pages.</Text>
         {coverage.length ? <Text style={styles.bodyMuted}>Coverage: {coveredCount}/{coverage.length} requirements covered · {plan.research.stop_reason?.replaceAll("_", " ")}</Text> : null}
         {plan.research.warnings?.map((warning) => <Text key={warning} style={styles.error}>{warning}</Text>)}
       </View>
@@ -223,7 +194,7 @@ function SourceLedger({ plan }: { plan: LearningRun }) {
           <Text style={styles.bodyMuted}>{source.rationale}</Text>
           {source.key_points?.map((point) => <Text key={point} style={styles.bullet}>• {point}</Text>)}
         </View>
-      )) : <Text style={styles.error}>This run has no verified sources and cannot be used as a researched course.</Text>}
+      )) : <Text style={styles.error}>This run found no verified sources.</Text>}
 
       <Text style={styles.sectionTitle}>Every page visited</Text>
       {visits.length ? visits.map((visit, index) => (
@@ -282,7 +253,6 @@ const styles = StyleSheet.create({
   card: { backgroundColor: "#fff", borderRadius: 16, padding: 16, marginTop: 12, gap: 10, borderWidth: 1, borderColor: "#eceaf3" },
   cardTitle: { fontSize: 22, lineHeight: 28, fontWeight: "800", color: "#1d1b2e" },
   link: { color: "#5647cc", fontWeight: "800", textAlign: "center" },
-  adminLink: { color: "#4234ae", fontWeight: "800", paddingVertical: 10 },
   userRow: { flexDirection: "row", justifyContent: "space-between", alignItems: "center", gap: 8 },
   signedIn: { flex: 1, color: "#332f46" },
   courseShell: { backgroundColor: "#fff", borderRadius: 18, padding: 16, marginTop: 16, gap: 16, borderWidth: 1, borderColor: "#e6e3ef" },

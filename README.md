@@ -1,6 +1,6 @@
 # Learning Coach
 
-An Expo (React Native + TypeScript) app for web, iOS, and Android, a Next.js web client, and a FastAPI service that turns a learner's goal into a researched curriculum, study schedule, quizzes, and assignments.
+An Expo (React Native + TypeScript) app for web, iOS, and Android, a Next.js web client, and a FastAPI service that researches a learner's topic: it maps what the topic involves and finds public pages that teach each part.
 
 ## Structure
 
@@ -18,10 +18,7 @@ docker compose up --build
 ```
 
 This starts the self-hosted data services, FastAPI, and the web client behind
-Caddy at `http://localhost:8080`; the API is available beneath `/api`. Before a
-non-development deployment, apply
-`backend/infra/postgres/roles.sql` as the database owner after migration; agent
-workers must use the insert-only `agent_writer` role, never the migration owner.
+Caddy at `http://localhost:8080`; the API is available beneath `/api`.
 
 ## Start the backend
 
@@ -56,7 +53,7 @@ Dishka, and that service calls a replaceable outbound health port.
 
 For local PostgreSQL, run `docker compose -f docker-compose.yml up -d` from `backend/` and set `DATABASE_URL=postgresql+asyncpg://learning_coach:learning_coach@127.0.0.1:5432/learning_coach` in `backend/.env`. Run `alembic upgrade head` to create or update the schema. For deployment, use the Supabase Session Pooler connection string in `DATABASE_URL`, then run that same migration command in the deployment environment. Supabase Auth owns email/password credentials; the backend verifies each Supabase access token and creates a matching application profile on first use.
 
-The API docs are available at `http://127.0.0.1:8000/docs`. Course generation
+The API docs are available at `http://127.0.0.1:8000/docs`. Research
 always uses Deep Agents with public browser research. The stable `agent-model`
 LiteLLM alias currently resolves to NVIDIA's `z-ai/glm-5.3-flash` endpoint.
 
@@ -69,9 +66,6 @@ replace the encryption key before deployment. Install the pinned browser tool
 with `npm install`, run `npm run browser:install`, and verify it with
 `npm run browser:doctor`. The application creates a session-scoped LiteLLM key
 for every Deep Agent run; provider calls never bypass the gateway.
-
-Set the first administrator's Supabase Auth `app_metadata.role` to `admin` in
-the Supabase dashboard or with a server-side administrative tool.
 
 ## Start the mobile app
 
@@ -89,13 +83,12 @@ Copy `mobile/.env.example` to `mobile/.env`. Set the Supabase Project URL and pu
 
 ## Agent runtime
 
-`POST /learning-runs` runs a real, evidence-gated pipeline:
+`POST /learning-runs` starts research in the background and returns `202 {id}`;
+poll `GET /learning-runs/{id}/status`, then read `GET /learning-runs/{id}`.
 
-1. **Research query planner** derives semantic coverage requirements, focused discovery queries, and optional canonical seeds.
-2. **Adaptive browser research** reads the strongest candidate first, discards leftover candidates after their mapped requirement is covered, and searches only for remaining evidence gaps while retaining a complete visit ledger.
-3. **Coverage evaluation and synthesis** stop only when every curriculum-scale requirement is supported at the requested depth; incomplete research is never presented as a complete course.
-4. **Planner** creates a compact, time-bounded course architecture that maps every verified requirement to modules, lesson blueprints, section plans, assessments, and exact supporting URLs.
-5. **Lesson writers** expand each blueprint into a 1,200-1,800 word lesson. Validation proves every research requirement reaches a cited paragraph and rejects missing, unsupported, repetitive, or generic content.
+1. **Research query planner** derives coverage requirements (what the topic involves), focused discovery queries, and optional canonical seeds.
+2. **Adaptive browser research** searches through SearXNG and reads the strongest candidate pages in headless Chrome, searching again only for remaining gaps.
+3. **Coverage evaluation and synthesis** record which pages cover which requirement. Requirements left partial or missing are reported as warnings.
 
 Deep Agents is the single orchestration runtime. Its LangChain `ToolStrategy`
 validates every workflow response against a Pydantic contract, while LiteLLM is
@@ -124,7 +117,7 @@ production use.
 
 ```
 backend/app/
-├── agents/       # Research, planning, lesson-writing prompts and output contracts
+├── agents/       # Research prompts and output contracts
 ├── controllers/  # HTTP route handlers
 ├── core/         # configuration
 ├── harness/      # Deep Agents runtime, LiteLLM gateway, and durable sessions
@@ -134,18 +127,13 @@ backend/app/
 └── services/     # workflow orchestration and application logic
 ```
 
-`GET /agent-sessions/{id}` returns a decrypted, authorization-checked transcript. `POST /agent-sessions/{id}/resume` appends to an active durable session, and `POST /agent-sessions/{id}/close` terminates it.
+## Accounts and testing
 
-## Accounts, analytics, and evaluation
-
-- `POST /auth/register`, `POST /auth/login`, and `GET /auth/me` proxy and validate Supabase Auth. Set `ADMIN_EMAIL` and the server-only `SUPABASE_SECRET_KEY` and that user is promoted to Supabase `app_metadata.role=admin` on first sign-in (or set the role in the Supabase dashboard); the application never stores passwords or issues its own login tokens.
-- Agent runs, sessions, tool invocations, and encrypted/redacted transcript entries are persisted. Learners can access only their own data; `/analytics/*` is admin-only.
-- The Expo client includes an admin analytics screen with user and session lists, outcome metrics, and full searchable transcript drill-down.
-- Run the test suite with `cd backend && pytest -q --benchmark-disable`; `tests/test_supabase_live.py` checks the auth contract against the real Supabase project from `backend/.env` (creating and deleting a throwaway confirmed user) and fails in CI without the `SUPABASE_URL`, `SUPABASE_PUBLISHABLE_KEY` and `SUPABASE_SECRET_KEY` repository secrets; run benchmarks with `pytest --benchmark-only`. The tests use controlled model and browser doubles but exercise the same browser-research and course-validation pipeline.
-- Run a complete opt-in live course smoke test with `LIVE_SMOKE_EMAIL` and `LIVE_SMOKE_PASSWORD` set for a confirmed Supabase account, then `cd backend && python scripts/live_course_smoke.py`. It consumes NVIDIA API quota, browses public pages, prints the exact selected source URLs and coverage metrics, and fails unless all research requirements map through modules and lessons to full-length cited paragraphs.
+- `POST /auth/register`, `POST /auth/login`, and `GET /auth/me` proxy and validate Supabase Auth. Set `ADMIN_EMAIL` and the server-only `SUPABASE_SECRET_KEY` and that user is promoted to Supabase `app_metadata.role=admin` on first sign-in; the application never stores passwords or issues its own login tokens.
+- Agent runs, sessions, tool invocations, and encrypted/redacted transcript entries are persisted. Learners can access only their own runs.
+- Run the test suite with `cd backend && pytest -q --benchmark-disable`; `tests/test_supabase_live.py` checks the auth contract against the real Supabase project from `backend/.env` (creating and deleting a throwaway confirmed user) and fails in CI without the `SUPABASE_URL`, `SUPABASE_PUBLISHABLE_KEY` and `SUPABASE_SECRET_KEY` repository secrets; run benchmarks with `pytest --benchmark-only`. The tests use controlled model and browser doubles but exercise the real browser-research pipeline.
 
 ## Next product milestones
 
-1. Move long-running research into durable background jobs with progress streaming.
-2. Add human source-quality review before course publication.
-3. Add notifications, calendar scheduling, and deeper learning analytics.
+1. **Phase 0 — curated coverage-based search:** one research agent with `search` and `read` tools builds the coverage checklist and its pages, and results appear as they arrive.
+2. Course generation on top of the research, once a stronger model is available.

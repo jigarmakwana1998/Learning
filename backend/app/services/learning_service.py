@@ -1,37 +1,27 @@
 import ipaddress
-import json
 import logging
-import math
 import re
 from datetime import datetime, timezone
 from time import perf_counter
 from urllib.parse import SplitResult, urlsplit, urlunsplit
 
 from pydantic import ValidationError
-from sqlalchemy import func, select
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.agents import (
-    LessonWriterAgent, PlannerAgent, ResearchCoverageEvaluatorAgent,
-    ResearchQueryPlannerAgent, ResearchSelectorAgent, ResearchSynthesisAgent,
+    ResearchCoverageEvaluatorAgent, ResearchQueryPlannerAgent, ResearchSelectorAgent,
+    ResearchSynthesisAgent,
 )
-from app.agents.contracts import PlannerOutput, ResearchPlanOutput
+from app.agents.contracts import ResearchPlanOutput
 from app.browser.gateway import BrowserGateway
 from app.core.config import get_settings
 from app.core.database import SessionLocal
 from app.core.security import encrypt
 from app.harness import AgentHarness
 from app.mcp.audit import record_tool_invocation, record_trace_event
-from app.models.database import (
-    AgentRun, AgentSessionRecord, AssignmentSubmissionRecord, LearningRequest,
-    LessonProgressRecord, QuizSubmissionRecord, TranscriptEntryRecord, User,
-)
-from app.schemas.learning import (
-    AssignmentSubmissionResponse, Course, CurriculumModule,
-    LearningGoal, LearningProgressResponse, LearningRun, LearningRunRequest, Lesson,
-    QuizQuestionFeedback, QuizSubmissionResponse, ResearchBrief, Source,
-    SourceVisit,
-)
+from app.models.database import AgentRun, AgentSessionRecord, LearningRequest, TranscriptEntryRecord, User
+from app.schemas.learning import LearningGoal, LearningRun, LearningRunRequest, ResearchBrief, Source, SourceVisit
 
 logger = logging.getLogger(__name__)
 
@@ -65,92 +55,21 @@ class LearningService:
                 logger.exception("learning run %s failed", run_id)
 
     async def execute_run(self, db: AsyncSession, run: AgentRun, goal: LearningGoal) -> LearningRun:
-        harness_name = run.harness
-        harness = AgentHarness(harness_name, db)
-        planner = PlannerAgent()
         try:
-            research_session, research = await self._browser_research(
-                db, run.id, harness_name, goal
-            )
+            research_session, research = await self._browser_research(db, run.id, run.harness, goal)
             self._require_covered_research(research)
-            planner_session, planner_output = await harness.start_and_run(
-                run.id, planner.name, planner.build_prompt(goal, research.model_dump())
-            )
-            # The planner returns structure only; turn chapters into modules and
-            # sections into lesson drafts that the lesson writer expands.
-            planned = {"curriculum": self._planned_modules(goal, planner_output, research)}
-            planned, writer_sessions = await self._expand_short_lessons(
-                harness, run.id, goal, research, planned
-            )
-            curriculum = self._provider_curriculum(goal, planned, research)
-            # Assessments come from a dedicated agent in a later step.
             result = LearningRun(
-                id=run.id, harness=harness_name, research=research, curriculum=curriculum,
-                course=Course(title=f"{goal.topic} learning path", modules=curriculum),
-                sessions={
-                    "Researcher": research_session.id,
-                    "Planner": planner_session.id,
-                    **writer_sessions,
-                },
+                id=run.id, harness=run.harness, research=research,
+                sessions={"Researcher": research_session.id},
             )
-            result.id = run.id
             run.status, run.result, run.completed_at = "completed", result.model_dump(mode="json"), datetime.now(timezone.utc)
             await db.commit()
-            return self.public_learning_run(result)
+            return result
         except Exception as error:
-            detail = str(error) if isinstance(error, RuntimeError | ValueError) else "Course generation failed"
+            detail = str(error) if isinstance(error, RuntimeError | ValueError) else "Research failed"
             run.status, run.result, run.completed_at = "failed", {"error": detail}, datetime.now(timezone.utc)
             await db.commit()
             raise
-
-    async def _expand_short_lessons(
-        self,
-        harness: AgentHarness,
-        run_id: str,
-        goal: LearningGoal,
-        research: ResearchBrief,
-        planner_output: dict,
-    ) -> tuple[dict, dict[str, str]]:
-        """Have the lesson writer expand every planned section into cited paragraphs."""
-        expanded_output = json.loads(json.dumps(planner_output))
-        writer = LessonWriterAgent()
-        sessions: dict[str, str] = {}
-        coverage_by_id = {item.requirement_id: item for item in research.coverage}
-        for module in expanded_output["curriculum"]:
-            for lesson in module["lessons"]:
-                coverage_targets = [
-                    coverage_by_id[requirement_id].model_dump(mode="json")
-                    for requirement_id in lesson["coverage_ids"]
-                ]
-                target_urls = {url for target in coverage_targets for url in target["supported_by"]}
-                verified_sources = [
-                    source.model_dump(mode="json")
-                    for source in research.sources
-                    if not target_urls or source.url in target_urls
-                ]
-                session, output = await harness.start_and_run(
-                    run_id,
-                    writer.name,
-                    writer.build_prompt(
-                        goal,
-                        {
-                            "module": {
-                                "week": module["week"],
-                                "title": module["title"],
-                                "outcomes": module["outcomes"],
-                            },
-                            "lesson_draft": lesson,
-                            "coverage_targets": coverage_targets,
-                            "verified_sources": verified_sources,
-                        },
-                    ),
-                )
-                expanded = output.get("lesson") if isinstance(output, dict) else None
-                if not isinstance(expanded, dict) or str(expanded.get("id")) != lesson["id"]:
-                    raise ValueError(f"LessonWriter must return the requested lesson id {lesson['id']}.")
-                lesson["paragraphs"] = expanded.get("paragraphs") or []
-                sessions[f"LessonWriter:{lesson['id']}"] = session.id
-        return expanded_output, sessions
 
     async def _browser_research(
         self,
@@ -786,243 +705,11 @@ class LearningService:
             verified.append(source)
         return verified
 
-    @classmethod
-    def _planned_modules(
-        cls,
-        goal: LearningGoal,
-        planner_output: dict,
-        research: ResearchBrief,
-    ) -> list[dict]:
-        """Turn the planner's chapters into modules and its sections into lesson drafts.
-
-        The schema already enforces required fields; here we only check what it cannot:
-        coverage ids must be ones research covered, every covered requirement needs a
-        section, and the course must fit the learner's time budget.
-        """
-        try:
-            plan = PlannerOutput.model_validate(planner_output)
-        except (TypeError, ValueError) as error:
-            raise ValueError(f"Planner returned an invalid chapter structure: {error}") from error
-        covered = {item.requirement_id for item in research.coverage if item.status == "covered"}
-        assigned: set[str] = set()
-        total_minutes = 0
-        modules = []
-        for chapter_number, chapter in enumerate(plan.chapters, start=1):
-            lessons = []
-            for section_number, section in enumerate(chapter.sections, start=1):
-                if unknown := [item for item in section.coverage_ids if item not in covered]:
-                    raise ValueError(
-                        f"Planner chapter {chapter_number} section {section_number} uses coverage ids "
-                        f"that research did not cover: {', '.join(unknown)}"
-                    )
-                assigned.update(section.coverage_ids)
-                total_minutes += section.estimated_minutes
-                lessons.append({
-                    "id": f"chapter-{chapter_number}-section-{section_number}",
-                    "title": section.title,
-                    "objective": section.objective,
-                    "coverage_ids": list(dict.fromkeys(section.coverage_ids)),
-                    "section_plan": section.key_points,
-                    "paragraphs": [],
-                    "estimated_minutes": section.estimated_minutes,
-                })
-            minutes = sum(lesson["estimated_minutes"] for lesson in lessons)
-            modules.append({
-                "week": chapter_number,  # chapter number; the field name predates chapters
-                # Chapters are numbered by the app; drop a model-added "Chapter 3:" prefix.
-                "title": re.sub(r"^\s*chapter\s+\d+\s*[:.\-\u2013\u2014]\s*", "", chapter.title, flags=re.IGNORECASE),
-                "overview": chapter.summary,
-                "outcomes": [lesson["objective"] for lesson in lessons],
-                "coverage_ids": list(dict.fromkeys(i for lesson in lessons for i in lesson["coverage_ids"])),
-                "source_urls": [],
-                "estimated_hours": max(1, math.ceil(minutes / 60)),
-                "lessons": lessons,
-            })
-        if missing := sorted(covered - assigned):
-            raise ValueError(f"Planner left covered research requirements without a section: {', '.join(missing)}")
-        budget = goal.weeks * goal.hours_per_week * 60
-        if total_minutes > budget:
-            raise ValueError(
-                f"Planner sections take {total_minutes} minutes, over the learner's {budget}-minute budget "
-                f"({goal.weeks} weeks x {goal.hours_per_week} h)."
-            )
-        return modules
-
-    @classmethod
-    def _provider_curriculum(
-        cls,
-        goal: LearningGoal,
-        planner_output: dict,
-        research: ResearchBrief,
-    ) -> list[CurriculumModule]:
-        """Validate complete provider-authored lessons and their evidence links."""
-        try:
-            modules = [CurriculumModule.model_validate(item) for item in planner_output["curriculum"]]
-        except (TypeError, ValueError) as error:
-            raise ValueError(f"Lesson writer returned an invalid lesson structure: {error}") from error
-
-        verified_sources = {source.url: source for source in research.sources}
-        verified_urls = set(verified_sources)
-        coverage_by_id = {item.requirement_id: item for item in research.coverage}
-        covered_ids = {key for key, item in coverage_by_id.items() if item.status == "covered"}
-        coverage_support = {
-            requirement_id: {
-                normalized
-                for url in item.supported_by
-                if (normalized := cls._normalize_evidence_url(url)) is not None
-            }
-            for requirement_id, item in coverage_by_id.items()
-        }
-        course_coverage_ids: set[str] = set()
-        grounded: list[CurriculumModule] = []
-        for module in sorted(modules, key=lambda item: item.week):
-            module_coverage_ids = cls._grounded_coverage_ids(
-                module.coverage_ids,
-                coverage_by_id,
-                f"module week {module.week}",
-            ) if coverage_by_id else []
-            lessons: list[Lesson] = []
-            for lesson in module.lessons:
-                if len(lesson.paragraphs) != len(lesson.section_plan):
-                    raise ValueError(
-                        f"Lesson {lesson.id} must have one paragraph per key point "
-                        f"({len(lesson.section_plan)}), got {len(lesson.paragraphs)}."
-                    )
-                lesson_coverage_ids = cls._grounded_coverage_ids(
-                    lesson.coverage_ids,
-                    coverage_by_id,
-                    f"lesson {lesson.id}",
-                ) if coverage_by_id else []
-                paragraphs = []
-                paragraph_urls: list[str] = []
-                paragraph_coverage_ids: set[str] = set()
-                for index, paragraph in enumerate(lesson.paragraphs, start=1):
-                    urls = cls._grounded_source_urls(
-                        paragraph.source_urls,
-                        verified_urls,
-                        f"lesson {lesson.id} paragraph {index}",
-                    )
-                    coverage_ids = cls._grounded_coverage_ids(
-                        paragraph.coverage_ids,
-                        coverage_by_id,
-                        f"lesson {lesson.id} paragraph {index}",
-                    ) if coverage_by_id else []
-                    if coverage_by_id and not set(coverage_ids).issubset(set(lesson_coverage_ids)):
-                        raise ValueError(
-                            f"Planner lesson {lesson.id} paragraph {index} declares coverage outside its lesson."
-                        )
-                    for requirement_id in coverage_ids:
-                        if not coverage_support[requirement_id].intersection(urls):
-                            raise ValueError(
-                                f"Planner lesson {lesson.id} paragraph {index} does not cite evidence "
-                                f"supporting coverage requirement {requirement_id}."
-                            )
-                        paragraph_coverage_ids.add(requirement_id)
-                    for url in urls:
-                        if url not in paragraph_urls:
-                            paragraph_urls.append(url)
-                    paragraphs.append(
-                        paragraph.model_copy(
-                            update={"coverage_ids": coverage_ids, "source_urls": urls}
-                        )
-                    )
-                if coverage_by_id and paragraph_coverage_ids != set(lesson_coverage_ids):
-                    raise ValueError(
-                        f"Planner lesson {lesson.id} must teach every declared coverage requirement in a cited paragraph."
-                    )
-                lesson_urls = cls._grounded_source_urls(
-                    lesson.source_urls or paragraph_urls,
-                    verified_urls,
-                    f"lesson {lesson.id}",
-                )
-                if not set(paragraph_urls).issubset(set(lesson_urls)):
-                    lesson_urls = [*lesson_urls, *(url for url in paragraph_urls if url not in lesson_urls)]
-                lessons.append(
-                    lesson.model_copy(
-                        update={
-                            "content": "\n\n".join(paragraph.text.strip() for paragraph in paragraphs),
-                            "paragraphs": paragraphs,
-                            "coverage_ids": lesson_coverage_ids,
-                            "source_urls": lesson_urls,
-                        }
-                    )
-                )
-            lesson_coverage_union = {
-                requirement_id
-                for lesson in lessons
-                for requirement_id in lesson.coverage_ids
-            }
-            if coverage_by_id and lesson_coverage_union != set(module_coverage_ids):
-                raise ValueError(
-                    f"Planner module week {module.week} coverage_ids must equal the union of its lessons."
-                )
-            course_coverage_ids.update(lesson_coverage_union)
-            # A chapter's sources are the ones its sections actually cite.
-            module_urls = cls._grounded_source_urls(
-                list(dict.fromkeys(url for lesson in lessons for url in lesson.source_urls)),
-                verified_urls,
-                f"chapter {module.week}",
-            )
-            grounded.append(
-                module.model_copy(
-                    update={
-                        "coverage_ids": module_coverage_ids,
-                        "source_urls": module_urls,
-                        "lessons": lessons,
-                    }
-                )
-            )
-        if coverage_by_id and course_coverage_ids != covered_ids:
-            missing = sorted(covered_ids - course_coverage_ids)
-            raise ValueError(
-                "Planner curriculum does not cover every verified research requirement: "
-                + ", ".join(missing)
-            )
-        return grounded
-
     @staticmethod
     def _require_covered_research(research: ResearchBrief) -> None:
-        """Generate a course from whatever research covered; stop only if it covered nothing."""
+        """Return whatever research covered; fail only if it covered nothing."""
         if not research.sources or not any(item.status == "covered" for item in research.coverage):
-            raise ValueError("Research did not cover any part of the requested topic, so no course was generated.")
-
-    @classmethod
-    def _grounded_source_urls(
-        cls,
-        urls: list[str],
-        verified_urls: set[str],
-        owner: str,
-    ) -> list[str]:
-        normalized_urls: list[str] = []
-        for raw_url in urls:
-            normalized = cls._normalize_evidence_url(raw_url)
-            if normalized is None or normalized not in verified_urls:
-                raise ValueError(f"Planner cited an unverified source URL in {owner}.")
-            if normalized not in normalized_urls:
-                normalized_urls.append(normalized)
-        if not normalized_urls:
-            raise ValueError(f"Planner must cite at least one verified source URL in {owner}.")
-        return normalized_urls
-
-    @staticmethod
-    def _grounded_coverage_ids(
-        coverage_ids: list[str],
-        coverage_by_id: dict[str, object],
-        owner: str,
-    ) -> list[str]:
-        grounded: list[str] = []
-        for raw_id in coverage_ids:
-            requirement_id = str(raw_id)
-            coverage = coverage_by_id.get(requirement_id)
-            if coverage is None or getattr(coverage, "status", None) != "covered":
-                raise ValueError(
-                    f"Planner referenced an unverified coverage requirement in {owner}."
-                )
-            if requirement_id not in grounded:
-                grounded.append(requirement_id)
-        if not grounded:
-            raise ValueError(f"Planner must assign at least one coverage requirement to {owner}.")
-        return grounded
+            raise ValueError("Research did not cover any part of the requested topic.")
 
     @staticmethod
     def _normalize_evidence_url(url: object) -> str | None:
@@ -1085,85 +772,6 @@ class LearningService:
         if run.status != "completed" or not run.result:
             raise ValueError("Learning run has not completed")
         return LearningRun.model_validate(run.result)
-
-    @staticmethod
-    def public_learning_run(run: LearningRun) -> LearningRun:
-        """Never reveal answer keys before a learner has submitted the quiz."""
-        if run.assessment is None:
-            return run
-        quiz_items = [item.model_copy(update={"correct_answer": None, "explanation": None}) for item in run.assessment.quiz_items]
-        legacy_quiz = [item.model_copy(update={"correct_answer": None, "explanation": None}) for item in run.assessment.quiz]
-        assessment = run.assessment.model_copy(update={"quiz_items": quiz_items, "quiz": legacy_quiz})
-        return run.model_copy(update={"assessment": assessment})
-
-    async def submit_quiz(self, db: AsyncSession, user: User, run: AgentRun, answers: list[tuple[str, str]]) -> QuizSubmissionResponse:
-        course = self.learning_run(run)
-        if course.assessment is None:
-            raise ValueError("This course has no quiz yet; assessments are generated in a later step.")
-        questions = course.assessment.quiz_items or course.assessment.quiz
-        by_id = {question.id: question for question in questions}
-        supplied = dict(answers)
-        if unknown := set(supplied) - set(by_id):
-            raise ValueError(f"Unknown quiz question: {min(unknown)}")
-        feedback = [
-            QuizQuestionFeedback(
-                question_id=question.id, selected_answer=supplied.get(question.id),
-                correct=supplied.get(question.id) == question.correct_answer,
-                correct_answer=question.correct_answer or "", explanation=question.explanation or "",
-            )
-            for question in questions
-        ]
-        correct_count = sum(item.correct for item in feedback)
-        score = round(correct_count * 100 / len(questions)) if questions else 0
-        record = QuizSubmissionRecord(
-            agent_run_id=run.id, user_id=user.id, answers=supplied, score_percent=score,
-            feedback=[item.model_dump(mode="json") for item in feedback],
-        )
-        db.add(record)
-        await db.commit()
-        await db.refresh(record)
-        return QuizSubmissionResponse(id=record.id, run_id=run.id, score_percent=score, correct_count=correct_count, total_questions=len(questions), feedback=feedback, submitted_at=record.submitted_at)
-
-    async def submit_work(self, db: AsyncSession, user: User, run: AgentRun, kind: str, content: str) -> AssignmentSubmissionResponse:
-        course = self.learning_run(run)
-        if course.assessment is None:
-            raise ValueError("This course has no assignment yet; assessments are generated in a later step.")
-        expected = course.assessment.assignment.deliverables if kind == "assignment" else ["A working outcome", "A short decision log", "Validation evidence", "A reflection"]
-        word_count = len(content.split())
-        status = "accepted" if word_count >= 120 else "needs_revision"
-        feedback = [
-            f"Submitted {word_count} words for the {kind}.",
-            f"To strengthen it, make sure it includes: {expected[0].lower()}.",
-            "Add a concrete observation or artifact that lets another learner verify your result.",
-        ]
-        record = AssignmentSubmissionRecord(agent_run_id=run.id, user_id=user.id, kind=kind, content=content, status=status, feedback=feedback)
-        db.add(record)
-        await db.commit()
-        await db.refresh(record)
-        return AssignmentSubmissionResponse(id=record.id, run_id=run.id, kind=kind, content=content, status=status, feedback=feedback, submitted_at=record.submitted_at)
-
-    async def set_progress(self, db: AsyncSession, user: User, run: AgentRun, lesson_id: str, completed: bool) -> LearningProgressResponse:
-        course = self.learning_run(run)
-        lessons = [lesson for module in (course.course.modules if course.course else course.curriculum) for lesson in module.lessons]
-        if lesson_id not in {lesson.id for lesson in lessons}:
-            raise ValueError("Unknown lesson for this learning run")
-        record = await db.get(LessonProgressRecord, (run.id, user.id, lesson_id))
-        if record is None:
-            record = LessonProgressRecord(agent_run_id=run.id, user_id=user.id, lesson_id=lesson_id, completed=completed)
-            db.add(record)
-        else:
-            record.completed = completed
-        await db.commit()
-        completed_lessons = await db.scalar(select(func.count()).select_from(LessonProgressRecord).where(LessonProgressRecord.agent_run_id == run.id, LessonProgressRecord.user_id == user.id, LessonProgressRecord.completed.is_(True)))
-        return LearningProgressResponse(run_id=run.id, lesson_id=lesson_id, completed=completed, completed_lessons=completed_lessons or 0, total_lessons=len(lessons))
-
-    @staticmethod
-    def evaluate(score_percent: int, confidence: str) -> str:
-        if score_percent < 60 or confidence == "low":
-            return "Review the prerequisite module and add one guided practice assignment before advancing."
-        if score_percent >= 85 and confidence == "high":
-            return "Skip the next review block and add an advanced applied project milestone."
-        return "Continue with the current sequence and retain the planned practice assignment."
 
 
 learning_service = LearningService()

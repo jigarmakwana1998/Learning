@@ -9,8 +9,6 @@ from typing import Annotated, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from app.schemas.learning import LessonParagraph
-
 SourceKind = Literal["documentation", "paper", "book", "lecture", "slides", "article", "repository"]
 Text = Annotated[str, Field(min_length=1)]
 
@@ -18,36 +16,6 @@ Text = Annotated[str, Field(min_length=1)]
 class AgentOutput(BaseModel):
     # Whitespace-only strings must not satisfy a minimum length.
     model_config = ConfigDict(str_strip_whitespace=True)
-
-
-class PlannedSection(AgentOutput):
-    title: str = Field(min_length=3)
-    objective: str = Field(min_length=12)
-    coverage_ids: list[Text] = Field(min_length=1)
-    key_points: list[Text] = Field(min_length=1)
-    estimated_minutes: int = Field(ge=1)
-
-
-class PlannedChapter(AgentOutput):
-    title: str = Field(min_length=3)
-    summary: str = Field(min_length=20)
-    sections: list[PlannedSection] = Field(min_length=1)
-
-
-class PlannerOutput(AgentOutput):
-    """Course structure only: chapters and their sections. Lesson text, sources, and
-    assessments are produced by later agents."""
-
-    chapters: list[PlannedChapter] = Field(min_length=1)
-
-
-class LessonExpansion(AgentOutput):
-    id: Text
-    paragraphs: list[LessonParagraph] = Field(min_length=1)
-
-
-class LessonWriterOutput(AgentOutput):
-    lesson: LessonExpansion
 
 
 class CoverageRequirementOutput(AgentOutput):
@@ -122,8 +90,6 @@ class ResearchCoverageOutput(AgentOutput):
 
 
 OUTPUT_SCHEMAS: dict[str, type[BaseModel]] = {
-    "Planner": PlannerOutput,
-    "LessonWriter": LessonWriterOutput,
     "ResearchQueryPlanner": ResearchPlanOutput,
     "ResearchSelector": ResearchSelectionsOutput,
 }
