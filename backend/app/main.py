@@ -7,7 +7,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from dishka import make_async_container
 from dishka.integrations.fastapi import setup_dishka
 from app.adapters.inbound.health import router as health_router
-from app.controllers import analytics_router, auth_router, learning_router, observability_router, sessions_router
+from app.controllers import auth_router, learning_router, observability_router
 from app.core.config import get_settings
 from app.core.database import engine
 from app.di.providers import ApplicationProvider
@@ -47,6 +47,4 @@ setup_dishka(make_async_container(ApplicationProvider()), app)
 app.include_router(health_router)
 app.include_router(auth_router)
 app.include_router(learning_router)
-app.include_router(sessions_router)
-app.include_router(analytics_router)
 app.include_router(observability_router)

@@ -6,7 +6,7 @@ import pytest
 
 import app.harness.deep_agents as deep_agents_module
 import app.harness.runtime as runtime_module
-from app.agents.contracts import PlannerOutput, output_schema_for
+from app.agents.contracts import output_schema_for
 from app.core.config import Settings
 from app.harness.deep_agents import (
     AgentEventCollector,
@@ -37,8 +37,6 @@ def test_deep_agent_routes_model_through_litellm_and_maps_medium_reasoning():
 
 
 def test_every_workflow_role_has_a_structured_output_contract():
-    assert output_schema_for("Planner") is PlannerOutput
-    assert output_schema_for("LessonWriter") is not None
     assert output_schema_for("ResearchQueryPlanner") is not None
     assert output_schema_for("ResearchSelector") is not None
     assert output_schema_for("ResearchSynthesisPart3") is not None

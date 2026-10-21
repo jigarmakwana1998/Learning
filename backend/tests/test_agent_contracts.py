@@ -3,8 +3,8 @@ import json
 import pytest
 
 from app.agents import (
-    PlannerAgent, ResearchCoverageEvaluatorAgent,
-    ResearchQueryPlannerAgent, ResearchSelectorAgent, ResearchSynthesisAgent,
+    ResearchCoverageEvaluatorAgent, ResearchQueryPlannerAgent, ResearchSelectorAgent,
+    ResearchSynthesisAgent,
 )
 from app.schemas.learning import LearningGoal
 
@@ -16,7 +16,6 @@ from app.schemas.learning import LearningGoal
         ResearchSelectorAgent(),
         ResearchSynthesisAgent(),
         ResearchCoverageEvaluatorAgent(),
-        PlannerAgent(),
     ],
 )
 def test_agents_emit_machine_readable_prompt_contracts(agent):

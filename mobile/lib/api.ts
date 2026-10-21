@@ -5,16 +5,8 @@ export type Source = { title: string; url: string; kind: string; rationale: stri
 export type SourceVisit = { url: string; title?: string; status: "discovered" | "read" | "unavailable"; selected: boolean };
 export type ResearchCoverage = { requirement_id: string; question: string; priority: "core" | "supporting"; depth: "overview" | "detailed"; evidence_policy: "single_source_ok" | "corroborate"; status: "covered" | "partial" | "missing"; confidence: number; supported_by: string[]; rationale: string };
 export type ResearchStats = { rounds: number; searches: number; pages_attempted: number; pages_read: number; sources_selected: number };
-export type LessonParagraph = { text: string; source_urls: string[] };
-export type CourseLesson = { id: string; title: string; objective: string; content?: string; paragraphs?: LessonParagraph[]; practice: string; estimated_minutes: number; source_urls: string[] };
-export type CourseModule = { week: number; title: string; outcomes: string[]; source_urls?: string[]; overview?: string; estimated_hours?: number; lessons?: CourseLesson[] };
-export type QuizItem = { id: string; module_week: number; prompt: string; choices: string[] };
-export type AssignmentPrompt = { title: string; prompt: string; deliverables: string[]; rubric: string[] };
 export type AgentHarness = "deep-agents";
-export type LearningRun = { id: string; harness: AgentHarness; research: { topic: string; sources: Source[]; visited_sources?: SourceVisit[]; coverage?: ResearchCoverage[]; stop_reason?: "coverage_satisfied" | "budget_exhausted" | "no_new_evidence" | null; warnings?: string[]; research_stats?: ResearchStats }; curriculum: CourseModule[]; assessment?: { quiz: QuizItem[]; quiz_items?: QuizItem[]; assignment: AssignmentPrompt; project: string } | null; sessions: Record<string, string> };
-export type AnalyticsOverview = { total_users: number; total_requests: number; completed_runs: number; failed_runs: number; active_sessions: number; transcript_entries: number; average_session_duration_ms: number };
-export type Session = { id: string; agent_name: string; harness: AgentHarness; status: string; learning_request_id: string; topic: string; duration_ms: number | null; started_at: string };
-export type TranscriptSession = { id: string; run_id: string; agent_name: string; harness: AgentHarness; status: string; transcript: Array<{ role: string; content: string; created_at: string }> };
+export type LearningRun = { id: string; harness: AgentHarness; research: { topic: string; sources: Source[]; visited_sources?: SourceVisit[]; coverage?: ResearchCoverage[]; stop_reason?: "coverage_satisfied" | "budget_exhausted" | "no_new_evidence" | null; warnings?: string[]; research_stats?: ResearchStats }; sessions: Record<string, string> };
 export type LearningRunTrace = { run_id: string; sessions: Array<{ id: string; agent_name: string; harness: AgentHarness; status: string; duration_ms?: number; transcript: Array<{ role: string; content: string; created_at: string }>; tool_invocations: Array<{ tool_name: string; status: string; duration_ms?: number; metadata?: { query?: string; purpose?: string; urls?: string[]; page_results?: Array<{ url: string; status: string }> }; created_at: string }> }> };
 
 const API_URL = process.env.EXPO_PUBLIC_API_URL ?? "http://127.0.0.1:8000";
@@ -43,7 +35,7 @@ export const logout = clearToken;
 export const getMe = () => request<User>("/auth/me");
 export async function createLearningRun(topic: string, hoursPerWeek: number): Promise<LearningRun> {
   const { id } = await request<{ id: string }>("/learning-runs", { method: "POST", body: JSON.stringify({ topic, hours_per_week: hoursPerWeek, weeks: 4, level: "beginner" }) });
-  // Generation can take many minutes; poll instead of holding one request open.
+  // Research can take minutes; poll instead of holding one request open.
   // A status check can blip (e.g. a transient auth 502); only give up after 3 in a row.
   for (let failures = 0; ; ) {
     await new Promise((resolve) => setTimeout(resolve, 5000));
@@ -56,11 +48,7 @@ export async function createLearningRun(topic: string, hoursPerWeek: number): Pr
       continue;
     }
     if (run.status === "completed") return request<LearningRun>(`/learning-runs/${id}`);
-    if (run.status === "failed") throw new Error(run.error ?? "Course generation failed.");
+    if (run.status === "failed") throw new Error(run.error ?? "Research failed.");
   }
 }
-export const getOverview = () => request<AnalyticsOverview>("/analytics/overview");
-export const getUsers = () => request<{ items: User[] }>("/analytics/users");
-export const getSessions = () => request<Session[]>("/analytics/sessions");
-export const getTranscript = (id: string) => request<TranscriptSession>(`/agent-sessions/${id}`);
 export const getLearningRunTrace = (id: string) => request<LearningRunTrace>(`/learning-runs/${id}/trace`);
