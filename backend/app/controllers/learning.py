@@ -2,10 +2,10 @@ from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.database import get_db
+from learning_db.session import get_db
 from app.core.dependencies import get_current_user
 from app.core.security import decrypt
-from app.models.database import (
+from learning_db.models import (
     AgentRun, AgentSessionRecord, LearningRequest, McpToolInvocation,
     TranscriptEntryRecord, User,
 )

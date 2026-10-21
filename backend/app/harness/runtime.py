@@ -8,8 +8,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.security import encrypt
 from app.harness.gateway import LiteLLMGateway
 from app.harness.deep_agents import DeepAgentRuntime, ToolInvocationEvent
-from app.mcp.audit import record_tool_invocation, record_trace_event
-from app.models.database import AgentSessionRecord, TranscriptEntryRecord
+from app.tracing import record_tool_invocation, record_trace_event
+from learning_db.models import AgentSessionRecord, TranscriptEntryRecord
 from app.schemas.learning import AgentHarness as AgentHarnessName
 
 

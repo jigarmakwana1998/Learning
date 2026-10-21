@@ -5,8 +5,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core import supabase
 from app.core.config import get_settings
-from app.core.database import get_db
-from app.models.database import User
+from learning_db.session import get_db
+from learning_db.models import User
 
 bearer = HTTPBearer(auto_error=False)
 

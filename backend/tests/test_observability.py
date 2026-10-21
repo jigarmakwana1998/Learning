@@ -3,9 +3,9 @@ import asyncio
 from fastapi.testclient import TestClient
 from sqlalchemy import select
 
-from app.core.database import SessionLocal
+from learning_db.session import SessionLocal
 from app.main import app
-from app.models.database import AgentRun, AgentSessionRecord, AgentTraceEvent, LearningRequest, User
+from learning_db.models import AgentRun, AgentSessionRecord, AgentTraceEvent, LearningRequest, User
 
 
 def _auth(client: TestClient) -> dict[str, str]:

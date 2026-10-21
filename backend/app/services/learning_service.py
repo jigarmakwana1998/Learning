@@ -14,13 +14,13 @@ from app.agents import (
     ResearchSynthesisAgent,
 )
 from app.agents.contracts import ResearchPlanOutput
-from app.browser.gateway import BrowserGateway
-from app.core.config import get_settings
-from app.core.database import SessionLocal
+from browser_mcp.config import browser_settings
+from browser_mcp.gateway import BrowserGateway
+from learning_db.session import SessionLocal
 from app.core.security import encrypt
 from app.harness import AgentHarness
-from app.mcp.audit import record_tool_invocation, record_trace_event
-from app.models.database import AgentRun, AgentSessionRecord, LearningRequest, TranscriptEntryRecord, User
+from app.tracing import record_tool_invocation, record_trace_event
+from learning_db.models import AgentRun, AgentSessionRecord, LearningRequest, TranscriptEntryRecord, User
 from app.schemas.learning import LearningGoal, LearningRun, LearningRunRequest, ResearchBrief, Source, SourceVisit
 
 logger = logging.getLogger(__name__)
@@ -80,7 +80,7 @@ class LearningService:
     ) -> tuple[AgentSessionRecord, ResearchBrief]:
         """Browse until semantic coverage is complete or a safety boundary is reached."""
         gateway = self.browser_gateway_factory()
-        settings = get_settings()
+        settings = browser_settings()
         audit_session = AgentSessionRecord(
             agent_run_id=run_id,
             agent_name="BrowserResearch",

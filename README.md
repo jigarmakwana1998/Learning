@@ -4,8 +4,13 @@ An Expo (React Native + TypeScript) app for web, iOS, and Android, a Next.js web
 
 ## Structure
 
-- `mobile/` — Universal Expo Router client (web, iOS, Android)
-- `backend/` — FastAPI API, Deep Agents runtime, and LiteLLM gateway integration
+One uv workspace (`pyproject.toml` and `uv.lock` at the root):
+
+- `backend/` — FastAPI API (`app/`): auth, research runs, the Deep Agents harness, and tracing
+- `database/` — `learning_db` package: SQLAlchemy models, async session, and Alembic migrations
+- `mcp/` — MCP servers; `mcp/browser/` (`browser_mcp`) is the restricted public-web browser (SearXNG search, hardened Chrome reads) with its pinned `agent-browser` toolchain
+- `web/` — Next.js client; `mobile/` — Expo Router client (web, iOS, Android)
+- `infra/` — Caddy, LiteLLM and SearXNG configuration for `compose.yml`
 
 ## Run the self-hosted stack
 
@@ -22,50 +27,43 @@ Caddy at `http://localhost:8080`; the API is available beneath `/api`.
 
 ## Start the backend
 
-Browser-backed research requires Node.js 24 or newer. Install the pinned
-agent-browser package and Chrome for Testing from the repository root:
-
-```powershell
-.\scripts\setup-browser-tools.ps1
-```
-
-On Linux or macOS:
+Install the Python workspace from the repository root:
 
 ```bash
-sh ./scripts/setup-browser-tools.sh
+uv sync
+```
+
+Browser-backed research requires Node.js 24 or newer. Install the pinned
+agent-browser package and Chrome for Testing for the browser MCP server:
+
+```bash
+sh mcp/browser/scripts/setup-browser-tools.sh      # Linux or macOS
+.\mcp\browser\scripts\setup-browser-tools.ps1      # Windows
 ```
 
 The scripts use `npm ci`, so the browser version comes from the committed
-lockfile. They install Chrome for Testing and run agent-browser's offline
-diagnostics. The Docker image performs the same setup automatically. Put the
-NVIDIA API key only in the repository-root `.env`; LiteLLM owns that credential,
-and the API receives only its LiteLLM master key.
+lockfile in `mcp/browser/`. The Docker image performs the same setup
+automatically. Put the NVIDIA API key only in the repository-root `.env`;
+LiteLLM owns that credential, and the API receives only its LiteLLM key.
+
+Copy `backend/.env.example` to `backend/.env`, set the Supabase values and a
+generated `APP_ENCRYPTION_KEY`, then create the schema and start the API:
 
 ```bash
-cd backend
-uv sync --group dev
-uv run uvicorn app.main:app --reload
+cd database && uv run alembic upgrade head && cd ..
+cd backend && uv run uvicorn app.main:app --reload
 ```
 
-The backend is managed with `uv`. Its first hexagonal vertical slice is
-`GET /health`: the FastAPI adapter resolves an application service through
-Dishka, and that service calls a replaceable outbound health port.
+For deployment, use the Supabase Session Pooler connection string in
+`DATABASE_URL` and run the same migration command. Supabase Auth owns
+email/password credentials; the backend verifies each Supabase access token and
+creates a matching application profile on first use. Local development may use
+SQLite for application data (`DATABASE_URL=sqlite+aiosqlite:///./learning_coach.db`),
+but authentication still requires Supabase.
 
-For local PostgreSQL, run `docker compose -f docker-compose.yml up -d` from `backend/` and set `DATABASE_URL=postgresql+asyncpg://learning_coach:learning_coach@127.0.0.1:5432/learning_coach` in `backend/.env`. Run `alembic upgrade head` to create or update the schema. For deployment, use the Supabase Session Pooler connection string in `DATABASE_URL`, then run that same migration command in the deployment environment. Supabase Auth owns email/password credentials; the backend verifies each Supabase access token and creates a matching application profile on first use.
-
-The API docs are available at `http://127.0.0.1:8000/docs`. Research
-always uses Deep Agents with public browser research. The stable `agent-model`
-LiteLLM alias currently resolves to NVIDIA's `z-ai/glm-5.3-flash` endpoint.
-
-Local development may use SQLite for application data, but authentication still
-requires Supabase. Both frontends call the backend auth endpoints; Supabase keys
-and authentication requests remain behind the API.
-
-Copy `backend/.env.example` to `backend/.env`, set the Supabase values, and
-replace the encryption key before deployment. Install the pinned browser tool
-with `npm install`, run `npm run browser:install`, and verify it with
-`npm run browser:doctor`. The application creates a session-scoped LiteLLM key
-for every Deep Agent run; provider calls never bypass the gateway.
+The API docs are available at `http://127.0.0.1:8000/docs`. The stable
+`agent-model` LiteLLM alias is mapped in `infra/litellm/config.yaml`; the
+application creates a session-scoped LiteLLM key for every agent run.
 
 ## Start the mobile app
 
@@ -79,7 +77,7 @@ npx expo start
 
 Press `w` for the web app, `i` for iOS simulator, or `a` for Android emulator. Expo Go can be used for a physical device.
 
-Copy `mobile/.env.example` to `mobile/.env`. Set the Supabase Project URL and publishable key; for an iOS/Android device, set `EXPO_PUBLIC_API_URL` to your computer's LAN address, for example `http://192.168.1.10:8000`.
+Copy `mobile/.env.example` to `mobile/.env`. For an iOS/Android device, set `EXPO_PUBLIC_API_URL` to your computer's LAN address, for example `http://192.168.1.10:8000`.
 
 ## Agent runtime
 
@@ -90,17 +88,12 @@ poll `GET /learning-runs/{id}/status`, then read `GET /learning-runs/{id}`.
 2. **Adaptive browser research** searches through SearXNG and reads the strongest candidate pages in headless Chrome, searching again only for remaining gaps.
 3. **Coverage evaluation and synthesis** record which pages cover which requirement. Requirements left partial or missing are reported as warnings.
 
-Deep Agents is the single orchestration runtime. Its LangChain `ToolStrategy`
+Deep Agents is the orchestration runtime. Its LangChain `ToolStrategy`
 validates every workflow response against a Pydantic contract, while LiteLLM is
 the mandatory model gateway. Changing the `agent-model` mapping in
 `infra/litellm/config.yaml` swaps the underlying model without changing agent
-code. The default model has a 1,048,576-token input window; automatic context
-compaction starts at 838,860 tokens and preserves the most recent 20 messages.
-`AGENT_REASONING_EFFORT=medium` is the application-level default and maps to
-NVIDIA's middle supported tier, `high`. Deep Agents state stays in its virtual
-filesystem, durable checkpoints use PostgreSQL in Compose and SQLite locally,
-and optional MCP servers are supplied with `MCP_SERVERS_JSON` and scoped by
-`AGENT_MCP_ROLES`.
+code. Deep Agents state stays in its virtual filesystem, and durable checkpoints
+use PostgreSQL in Compose and SQLite locally.
 
 ### Agent observability
 
@@ -118,20 +111,19 @@ production use.
 ```
 backend/app/
 ├── agents/       # Research prompts and output contracts
-├── controllers/  # HTTP route handlers
-├── core/         # configuration
+├── controllers/  # HTTP route handlers (auth, health, learning runs, observability)
+├── core/         # configuration, auth dependencies, Supabase, encryption
 ├── harness/      # Deep Agents runtime, LiteLLM gateway, and durable sessions
-├── mcp/          # tool and trace audit persistence
-├── models/       # domain models (session and transcript entities)
 ├── schemas/      # API request/response validation
-└── services/     # workflow orchestration and application logic
+├── services/     # research workflow
+└── tracing.py    # trace-event and tool-invocation persistence
 ```
 
 ## Accounts and testing
 
 - `POST /auth/register`, `POST /auth/login`, and `GET /auth/me` proxy and validate Supabase Auth. Set `ADMIN_EMAIL` and the server-only `SUPABASE_SECRET_KEY` and that user is promoted to Supabase `app_metadata.role=admin` on first sign-in; the application never stores passwords or issues its own login tokens.
 - Agent runs, sessions, tool invocations, and encrypted/redacted transcript entries are persisted. Learners can access only their own runs.
-- Run the test suite with `cd backend && pytest -q --benchmark-disable`; `tests/test_supabase_live.py` checks the auth contract against the real Supabase project from `backend/.env` (creating and deleting a throwaway confirmed user) and fails in CI without the `SUPABASE_URL`, `SUPABASE_PUBLISHABLE_KEY` and `SUPABASE_SECRET_KEY` repository secrets; run benchmarks with `pytest --benchmark-only`. The tests use controlled model and browser doubles but exercise the real browser-research pipeline.
+- Run the test suite from the repository root with `uv run pytest -q --benchmark-disable` (backend and browser MCP tests); `tests/test_supabase_live.py` checks the auth contract against the real Supabase project from `backend/.env` (creating and deleting a throwaway confirmed user) and fails in CI without the `SUPABASE_URL`, `SUPABASE_PUBLISHABLE_KEY` and `SUPABASE_SECRET_KEY` repository secrets; run benchmarks with `pytest --benchmark-only`. The tests use controlled model and browser doubles but exercise the real browser-research pipeline.
 
 ## Next product milestones
 

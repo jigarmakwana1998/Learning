@@ -5,7 +5,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from app.models.database import AgentSessionRecord, McpToolInvocation
+from learning_db.models import AgentSessionRecord, McpToolInvocation
 from app.schemas.learning import LearningGoal
 from app.services.learning_service import LearningService
 

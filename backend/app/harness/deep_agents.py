@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import json
 import logging
-import sys
 from collections.abc import AsyncIterator, Awaitable, Callable
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
@@ -19,7 +18,6 @@ from langchain.agents.structured_output import ToolStrategy
 from langchain_core.callbacks import AsyncCallbackHandler
 from langchain_core.messages import AIMessage
 from langchain_litellm import ChatLiteLLM
-from langchain_mcp_adapters.client import MultiServerMCPClient
 from langgraph.checkpoint.base import BaseCheckpointSaver
 from langgraph.checkpoint.postgres.aio import AsyncPostgresSaver
 from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
@@ -233,14 +231,13 @@ class DeepAgentRuntime:
             SummarizationToolMiddleware(summarization),
         ]
         collector = AgentEventCollector(on_event)
-        tools = await self._mcp_tools(agent_name)
         schema = output_schema_for(agent_name)
         response_format = ToolStrategy(schema, handle_errors=True) if schema else None
 
         async with self._checkpointer() as checkpointer:
             agent = create_deep_agent(
                 model=model,
-                tools=tools,
+                tools=[],
                 system_prompt=self._system_prompt(agent_name),
                 middleware=middleware,
                 backend=backend,
@@ -281,18 +278,6 @@ class DeepAgentRuntime:
                 "extra_body": {"chat_template_kwargs": {"clear_thinking": True}},
             },
         )
-
-    async def _mcp_tools(self, agent_name: str) -> list[Any]:
-        if not self.settings.agent_mcp_enabled or agent_name not in self.settings.agent_mcp_roles:
-            return []
-        connections = self.settings.mcp_servers or {
-            "learning-browser": {
-                "transport": "stdio",
-                "command": sys.executable,
-                "args": ["-m", "app.browser.server"],
-            }
-        }
-        return await MultiServerMCPClient(connections, tool_name_prefix=True).get_tools()
 
     @asynccontextmanager
     async def _checkpointer(self) -> AsyncIterator[BaseCheckpointSaver]:

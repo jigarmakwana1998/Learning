@@ -5,7 +5,7 @@ from fastapi import APIRouter, Depends, HTTPException
 
 from app.core import supabase
 from app.core.dependencies import get_current_user
-from app.models.database import User
+from learning_db.models import User
 from app.schemas.auth import LoginRequest, RegisterRequest, TokenResponse, UserResponse
 
 router = APIRouter(prefix="/auth", tags=["auth"])
