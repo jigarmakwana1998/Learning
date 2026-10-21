@@ -81,19 +81,21 @@ Copy `mobile/.env.example` to `mobile/.env`. For an iOS/Android device, set `EXP
 
 ## Agent runtime
 
-`POST /learning-runs` starts research in the background and returns `202 {id}`;
-poll `GET /learning-runs/{id}/status`, then read `GET /learning-runs/{id}`.
+`POST /research-runs` starts research in the background and returns `202 {id}`.
+Poll `GET /research-runs/{id}`: it returns the status, the current tool activity,
+the coverage items and the pages saved so far, so results show as they arrive.
 
-1. **Research query planner** derives coverage requirements (what the topic involves), focused discovery queries, and optional canonical seeds.
-2. **Adaptive browser research** searches through SearXNG and reads the strongest candidate pages in headless Chrome, searching again only for remaining gaps.
-3. **Coverage evaluation and synthesis** record which pages cover which requirement. Requirements left partial or missing are reported as warnings.
+One **Researcher** Deep Agent does the work. Its tools are the browser MCP server's
+`browser_search` (SearXNG) and `browser_read` (headless Chrome), plus
+`set_coverage` (what the topic must cover, and how well it is covered) and
+`save_page` (publish a page it has read; unread URLs are rejected). Its skills in
+`backend/app/skills/` (`plan`, `select`, `synthesize`, `evaluate`) are read on
+demand with `read_file`; the `task` subagent is disabled. The course length
+(hours per week × weeks) sets how much the plan must cover.
 
-Deep Agents is the orchestration runtime. Its LangChain `ToolStrategy`
-validates every workflow response against a Pydantic contract, while LiteLLM is
-the mandatory model gateway. Changing the `agent-model` mapping in
-`infra/litellm/config.yaml` swaps the underlying model without changing agent
-code. Deep Agents state stays in its virtual filesystem, and durable checkpoints
-use PostgreSQL in Compose and SQLite locally.
+LiteLLM is the mandatory model gateway: changing the `agent-model` mapping in
+`infra/litellm/config.yaml` swaps the model without changing agent code. Durable
+checkpoints use PostgreSQL in Compose and SQLite locally.
 
 ### Agent observability
 
@@ -110,12 +112,13 @@ production use.
 
 ```
 backend/app/
-├── agents/       # Research prompts and output contracts
-├── controllers/  # HTTP route handlers (auth, health, learning runs, observability)
+├── agents/       # Researcher prompt, progress tools, browser MCP client
+├── controllers/  # HTTP route handlers (auth, health, research runs, observability)
 ├── core/         # configuration, auth dependencies, Supabase, encryption
 ├── harness/      # Deep Agents runtime, LiteLLM gateway, and durable sessions
 ├── schemas/      # API request/response validation
-├── services/     # research workflow
+├── services/     # research runs and their live progress
+├── skills/       # plan, select, synthesize, evaluate (SKILL.md)
 └── tracing.py    # trace-event and tool-invocation persistence
 ```
 

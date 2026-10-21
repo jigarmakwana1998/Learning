@@ -32,18 +32,21 @@ def test_configured_admin_email_is_promoted_in_supabase(fake_supabase):
     assert fake_supabase.users["owner@example.com"]["app_metadata"] == {"role": "admin"}
 
 
-def test_failed_background_run_reports_reason_through_status(monkeypatch):
-    from app.services.learning_service import learning_service
+def test_failed_background_run_reports_its_reason(monkeypatch):
+    from contextlib import asynccontextmanager
 
-    async def fail_research(*_args):
-        raise ValueError("No verified evidence supports the requested topic.")
+    from app.services.research_service import research_service
 
-    monkeypatch.setattr(learning_service, "_browser_research", fail_research)
+    @asynccontextmanager
+    async def unavailable_browser():
+        raise RuntimeError("The browser MCP server could not start.")
+        yield []
+
+    monkeypatch.setattr(research_service, "browser_tools", unavailable_browser)
     with TestClient(app) as client:
         headers = auth(client, "async-runner@example.com")
-        started = client.post("/learning-runs", headers=headers, json={"topic": "Transformers", "weeks": 1})
+        started = client.post("/research-runs", headers=headers, json={"topic": "Transformers", "weeks": 1})
         assert started.status_code == 202 and started.json()["status"] == "running"
-        run_id = started.json()["id"]
-        status = client.get(f"/learning-runs/{run_id}/status", headers=headers).json()
-        assert status == {"id": run_id, "status": "failed", "error": "No verified evidence supports the requested topic."}
-        assert client.get(f"/learning-runs/{run_id}", headers=headers).status_code == 409
+        run = client.get(f"/research-runs/{started.json()['id']}", headers=headers).json()
+        assert run["status"] == "failed"
+        assert run["error"] == "The browser MCP server could not start."

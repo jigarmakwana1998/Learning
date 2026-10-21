@@ -1,8 +1,9 @@
-from typing import Literal
+from typing import Annotated, Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 AgentHarness = Literal["deep-agents"]
+SourceKind = Literal["documentation", "paper", "book", "lecture", "slides", "article", "repository"]
 
 
 class LearningGoal(BaseModel):
@@ -12,57 +13,33 @@ class LearningGoal(BaseModel):
     weeks: int = Field(default=4, ge=1, le=24)
 
 
-class LearningRunRequest(LearningGoal):
-    pass
+class AgentOutput(BaseModel):
+    """Tool arguments the agent writes. Minimums live here so a violation goes back to the model to fix."""
+
+    # Whitespace-only strings must not satisfy a minimum length.
+    model_config = ConfigDict(str_strip_whitespace=True)
 
 
-class Source(BaseModel):
+class CoverageItem(AgentOutput):
+    id: str = Field(min_length=1, description="Short stable id, reused in save_page covers.")
+    question: str = Field(min_length=8, description="What the pages must answer for this item.")
+    status: Literal["missing", "partial", "covered"] = "missing"
+
+
+class SavedPage(AgentOutput):
+    url: str = Field(min_length=8, description="Exact final URL from a browser_read result.")
     title: str = Field(min_length=2)
-    url: str
-    kind: Literal["documentation", "paper", "book", "lecture", "slides", "article", "repository"]
-    rationale: str = Field(min_length=8)
-    key_points: list[str] = Field(default_factory=list)
+    kind: SourceKind
+    why: str = Field(min_length=8, description="What this page can teach in this course.")
+    key_points: list[Annotated[str, Field(min_length=20)]] = Field(min_length=1)
+    covers: list[str] = Field(min_length=1, description="Ids of the coverage items this page supports.")
 
 
-class SourceVisit(BaseModel):
-    url: str
-    title: str | None = None
-    status: Literal["discovered", "read", "unavailable"]
-    selected: bool = False
-
-
-class ResearchCoverage(BaseModel):
-    requirement_id: str
-    question: str
-    priority: Literal["core", "supporting"]
-    depth: Literal["overview", "detailed"]
-    evidence_policy: Literal["single_source_ok", "corroborate"]
-    status: Literal["covered", "partial", "missing"]
-    confidence: float = Field(ge=0, le=1)
-    supported_by: list[str] = Field(default_factory=list)
-    rationale: str = ""
-
-
-class ResearchStats(BaseModel):
-    rounds: int = 0
-    searches: int = 0
-    pages_attempted: int = 0
-    pages_read: int = 0
-    sources_selected: int = 0
-
-
-class ResearchBrief(BaseModel):
-    topic: str
-    sources: list[Source]
-    visited_sources: list[SourceVisit] = Field(default_factory=list)
-    coverage: list[ResearchCoverage] = Field(default_factory=list)
-    stop_reason: Literal["coverage_satisfied", "budget_exhausted", "no_new_evidence"] | None = None
-    warnings: list[str] = Field(default_factory=list)
-    research_stats: ResearchStats = Field(default_factory=ResearchStats)
-
-
-class LearningRun(BaseModel):
+class ResearchRun(BaseModel):
     id: str
-    harness: AgentHarness
-    research: ResearchBrief
-    sessions: dict[str, str]
+    topic: str
+    status: str
+    error: str | None = None
+    activity: str | None = None
+    coverage: list[CoverageItem] = Field(default_factory=list)
+    pages: list[SavedPage] = Field(default_factory=list)

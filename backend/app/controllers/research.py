@@ -9,42 +9,35 @@ from learning_db.models import (
     AgentRun, AgentSessionRecord, LearningRequest, McpToolInvocation,
     TranscriptEntryRecord, User,
 )
-from app.schemas.learning import LearningRun, LearningRunRequest
-from app.services.learning_service import learning_service
+from app.schemas.learning import LearningGoal, ResearchRun
+from app.services.research_service import research_service
 from app.schemas.session import (
     LearningRunTraceResponse, RunTraceSessionResponse, ToolInvocationResponse,
     TranscriptEntryResponse,
 )
 
-router = APIRouter(prefix="/learning-runs", tags=["learning"])
+router = APIRouter(prefix="/research-runs", tags=["research"])
 
 
 @router.post("", status_code=202)
-async def create_learning_run(request: LearningRunRequest, background_tasks: BackgroundTasks, db: AsyncSession = Depends(get_db), user: User = Depends(get_current_user)) -> dict:
-    """Start generation and return at once; poll /{id}/status, then GET /{id}."""
-    run = await learning_service.start_run(db, user, request)
-    background_tasks.add_task(learning_service.execute_in_background, run.id, request)
+async def create_research_run(goal: LearningGoal, background_tasks: BackgroundTasks, db: AsyncSession = Depends(get_db), user: User = Depends(get_current_user)) -> dict:
+    """Start research and return at once; poll GET /{id} for coverage and pages as they arrive."""
+    run = await research_service.start_run(db, user, goal)
+    background_tasks.add_task(research_service.execute_in_background, run.id, goal)
     return {"id": run.id, "status": run.status}
 
 
-@router.get("/{run_id}/status")
-async def get_learning_run_status(run_id: str, db: AsyncSession = Depends(get_db), user: User = Depends(get_current_user)) -> dict:
-    run = await _owned_run_or_404(run_id, db, user)
-    error = (run.result or {}).get("error") if run.status == "failed" else None
-    return {"id": run.id, "status": run.status, "error": error}
-
-
 @router.get("")
-async def list_learning_runs(db: AsyncSession = Depends(get_db), user: User = Depends(get_current_user)) -> list[dict]:
+async def list_research_runs(db: AsyncSession = Depends(get_db), user: User = Depends(get_current_user)) -> list[dict]:
     rows = (await db.execute(select(AgentRun, LearningRequest).join(LearningRequest, AgentRun.learning_request_id == LearningRequest.id).where(LearningRequest.user_id == user.id).order_by(AgentRun.started_at.desc()))).all()
     return [{"id": run.id, "topic": request.topic, "harness": run.harness, "status": run.status, "created_at": run.started_at} for run, request in rows]
 
 
-async def _owned_run_or_404(run_id: str, db: AsyncSession, user: User) -> AgentRun:
-    run = await learning_service.owned_run(db, user, run_id)
-    if not run:
-        raise HTTPException(status_code=404, detail="Learning run not found")
-    return run
+async def _owned_run_or_404(run_id: str, db: AsyncSession, user: User) -> tuple[AgentRun, LearningRequest]:
+    owned = await research_service.owned_run(db, user, run_id)
+    if not owned:
+        raise HTTPException(status_code=404, detail="Research run not found")
+    return owned
 
 
 @router.get("/{run_id}/trace", response_model=LearningRunTraceResponse)
@@ -110,10 +103,7 @@ async def get_learning_run_trace(
     return LearningRunTraceResponse(run_id=run_id, sessions=items)
 
 
-@router.get("/{run_id}", response_model=LearningRun, response_model_exclude_none=True)
-async def get_learning_run(run_id: str, db: AsyncSession = Depends(get_db), user: User = Depends(get_current_user)) -> LearningRun:
-    run = await _owned_run_or_404(run_id, db, user)
-    try:
-        return learning_service.learning_run(run)
-    except ValueError as error:
-        raise HTTPException(status_code=409, detail=str(error)) from error
+@router.get("/{run_id}", response_model=ResearchRun)
+async def get_research_run(run_id: str, db: AsyncSession = Depends(get_db), user: User = Depends(get_current_user)) -> ResearchRun:
+    run, request = await _owned_run_or_404(run_id, db, user)
+    return research_service.research_run(run, request.topic)

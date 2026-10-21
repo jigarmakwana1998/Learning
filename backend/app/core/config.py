@@ -23,7 +23,7 @@ class Settings(BaseModel):
     agent_reasoning_effort: Literal["low", "medium", "high", "max"] = Field(
         default_factory=lambda: os.getenv("AGENT_REASONING_EFFORT", "medium")
     )
-    agent_recursion_limit: int = Field(default_factory=lambda: int(os.getenv("AGENT_RECURSION_LIMIT", "100")))
+    agent_recursion_limit: int = Field(default_factory=lambda: int(os.getenv("AGENT_RECURSION_LIMIT", "1000")))
     agent_compaction_tokens: int = Field(
         default_factory=lambda: int(os.getenv("AGENT_COMPACTION_TOKENS", "838860"))
     )
