@@ -28,6 +28,24 @@ class PlannedSection(AgentOutput):
     estimated_minutes: int = Field(ge=1)
 
 
+class OutlineChapter(AgentOutput):
+    title: str = Field(min_length=3)
+    summary: str = Field(min_length=20)
+    coverage_ids: list[Text] = Field(min_length=1)
+
+
+class CourseOutline(AgentOutput):
+    """Planner step 1: the chapter list for the whole course."""
+
+    chapters: list[OutlineChapter] = Field(min_length=1)
+
+
+class ChapterSections(AgentOutput):
+    """Planner step 2, once per chapter: that chapter's sections."""
+
+    sections: list[PlannedSection] = Field(min_length=1)
+
+
 class PlannedChapter(AgentOutput):
     title: str = Field(min_length=3)
     summary: str = Field(min_length=20)
@@ -35,8 +53,8 @@ class PlannedChapter(AgentOutput):
 
 
 class PlannerOutput(AgentOutput):
-    """Course structure only: chapters and their sections. Lesson text, sources, and
-    assessments are produced by later agents."""
+    """The assembled plan (outline chapters plus their sections), validated before
+    the lesson writer runs. Not sent to a model."""
 
     chapters: list[PlannedChapter] = Field(min_length=1)
 
@@ -122,7 +140,7 @@ class ResearchCoverageOutput(AgentOutput):
 
 
 OUTPUT_SCHEMAS: dict[str, type[BaseModel]] = {
-    "Planner": PlannerOutput,
+    "Planner": CourseOutline,
     "LessonWriter": LessonWriterOutput,
     "ResearchQueryPlanner": ResearchPlanOutput,
     "ResearchSelector": ResearchSelectionsOutput,
@@ -130,6 +148,8 @@ OUTPUT_SCHEMAS: dict[str, type[BaseModel]] = {
 
 
 def output_schema_for(agent_name: str) -> type[BaseModel] | None:
+    if agent_name.startswith("PlannerChapter"):
+        return ChapterSections
     if agent_name.startswith("ResearchSynthesis"):
         return ResearchSynthesisOutput
     if agent_name.startswith("ResearchCoverage"):

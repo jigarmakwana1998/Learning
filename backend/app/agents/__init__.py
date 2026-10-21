@@ -1,11 +1,12 @@
 from .lesson_writer import LessonWriterAgent
-from .planner import PlannerAgent
+from .planner import ChapterPlannerAgent, PlannerAgent
 from .research_pipeline import (
     ResearchCoverageEvaluatorAgent, ResearchQueryPlannerAgent, ResearchSelectorAgent,
     ResearchSynthesisAgent,
 )
 
 __all__ = [
+    "ChapterPlannerAgent",
     "LessonWriterAgent",
     "PlannerAgent",
     "ResearchCoverageEvaluatorAgent",

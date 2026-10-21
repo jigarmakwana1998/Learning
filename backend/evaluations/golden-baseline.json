@@ -4,7 +4,7 @@
   "required_agent_output_terms": {
     "query_planner": ["coverage_requirements", "queries", "coverage_ids"],
     "researcher": ["sources", "key_points", "coverage_evidence"],
-    "planner": ["chapters", "sections", "coverage_ids", "key_points"],
+    "planner": ["chapters", "coverage_ids"],
     "lesson_writer": ["section_plan", "coverage_targets", "source_urls", "supported_by"]
   }
 }

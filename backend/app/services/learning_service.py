@@ -12,7 +12,7 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.agents import (
-    LessonWriterAgent, PlannerAgent, ResearchCoverageEvaluatorAgent,
+    ChapterPlannerAgent, LessonWriterAgent, PlannerAgent, ResearchCoverageEvaluatorAgent,
     ResearchQueryPlannerAgent, ResearchSelectorAgent, ResearchSynthesisAgent,
 )
 from app.agents.contracts import PlannerOutput, ResearchPlanOutput
@@ -67,18 +67,15 @@ class LearningService:
     async def execute_run(self, db: AsyncSession, run: AgentRun, goal: LearningGoal) -> LearningRun:
         harness_name = run.harness
         harness = AgentHarness(harness_name, db)
-        planner = PlannerAgent()
         try:
             research_session, research = await self._browser_research(
                 db, run.id, harness_name, goal
             )
             self._require_covered_research(research)
-            planner_session, planner_output = await harness.start_and_run(
-                run.id, planner.name, planner.build_prompt(goal, research.model_dump())
-            )
+            plan, planner_sessions = await self._plan_course(harness, run.id, goal, research)
             # The planner returns structure only; turn chapters into modules and
             # sections into lesson drafts that the lesson writer expands.
-            planned = {"curriculum": self._planned_modules(goal, planner_output, research)}
+            planned = {"curriculum": self._planned_modules(goal, plan, research)}
             planned, writer_sessions = await self._expand_short_lessons(
                 harness, run.id, goal, research, planned
             )
@@ -89,7 +86,7 @@ class LearningService:
                 course=Course(title=f"{goal.topic} learning path", modules=curriculum),
                 sessions={
                     "Researcher": research_session.id,
-                    "Planner": planner_session.id,
+                    **planner_sessions,
                     **writer_sessions,
                 },
             )
@@ -102,6 +99,62 @@ class LearningService:
             run.status, run.result, run.completed_at = "failed", {"error": detail}, datetime.now(timezone.utc)
             await db.commit()
             raise
+
+    async def _plan_course(
+        self,
+        harness: AgentHarness,
+        run_id: str,
+        goal: LearningGoal,
+        research: ResearchBrief,
+    ) -> tuple[dict, dict[str, str]]:
+        """Plan in two small steps: the chapter outline, then each chapter's sections in order.
+
+        Each chapter call sees the whole outline and the sections already planned, so
+        nothing is lost by splitting the work into smaller outputs.
+        """
+        outliner, chapter_planner = PlannerAgent(), ChapterPlannerAgent()
+        outline_session, outline = await harness.start_and_run(
+            run_id, outliner.name, outliner.build_prompt(goal, research.model_dump())
+        )
+        sessions = {"Planner": outline_session.id}
+        coverage_by_id = {item.requirement_id: item for item in research.coverage}
+        remaining_minutes = goal.weeks * goal.hours_per_week * 60
+        chapters: list[dict] = []
+        for number, chapter in enumerate(outline["chapters"], start=1):
+            targets = [coverage_by_id[i] for i in chapter["coverage_ids"] if i in coverage_by_id]
+            supporting_urls = {url for target in targets for url in target.supported_by}
+            role = f"{chapter_planner.name}{number}"
+            session, output = await harness.start_and_run(
+                run_id,
+                role,
+                chapter_planner.build_prompt(
+                    goal,
+                    {
+                        "outline": [
+                            {"number": index, "title": item["title"], "summary": item["summary"]}
+                            for index, item in enumerate(outline["chapters"], start=1)
+                        ],
+                        "chapter": {"number": number, **chapter},
+                        "planned_sections": [
+                            {"chapter": index, "sections": [section["title"] for section in item["sections"]]}
+                            for index, item in enumerate(chapters, start=1)
+                        ],
+                        "research": {
+                            "coverage": [target.model_dump(mode="json") for target in targets],
+                            "sources": [
+                                source.model_dump(mode="json")
+                                for source in research.sources
+                                if source.url in supporting_urls
+                            ],
+                        },
+                        "remaining_minutes": remaining_minutes,
+                    },
+                ),
+            )
+            sessions[role] = session.id
+            chapters.append({**chapter, "sections": output["sections"]})
+            remaining_minutes -= sum(section["estimated_minutes"] for section in output["sections"])
+        return {"chapters": chapters}, sessions
 
     async def _expand_short_lessons(
         self,
