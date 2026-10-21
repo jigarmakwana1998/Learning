@@ -12,8 +12,8 @@ from uuid import uuid4
 
 from fastapi.testclient import TestClient
 
-from app.browser.client import AgentBrowserClient
-from app.browser.gateway import BrowserGateway
+from browser_mcp.client import AgentBrowserClient
+from browser_mcp.gateway import BrowserGateway
 from app.harness.deep_agents import DeepAgentExecution
 from app.main import app
 from app.services.learning_service import learning_service

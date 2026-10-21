@@ -6,9 +6,7 @@ protect the pieces that must be present before the opt-in live smoke test can ru
 
 from __future__ import annotations
 
-import json
 import re
-import tomllib
 from pathlib import Path
 
 
@@ -22,52 +20,6 @@ def _service_block(compose: str, service: str) -> str:
     )
     assert match is not None, f"compose service {service!r} is missing"
     return match.group("body")
-
-
-def test_browser_toolchain_is_exactly_pinned_in_manifest_and_lockfile():
-    manifest = json.loads((PROJECT_ROOT / "package.json").read_text(encoding="utf-8"))
-    lock = json.loads((PROJECT_ROOT / "package-lock.json").read_text(encoding="utf-8"))
-
-    expected = {"agent-browser": "0.27.3"}
-    assert manifest["private"] is True
-    assert manifest["engines"]["node"] == ">=24.0.0"
-    assert manifest["dependencies"] == expected
-    assert lock["packages"][""]["name"] == manifest["name"]
-    assert lock["packages"][""]["engines"] == manifest["engines"]
-    assert lock["packages"][""]["dependencies"] == expected
-    browser_package = lock["packages"]["node_modules/agent-browser"]
-    assert browser_package["version"] == "0.27.3"
-    # The pinned browser CLI requires Node 24.  Keep the container in sync with
-    # the lockfile instead of relying on npm's engine warning at build time.
-    assert browser_package["engines"]["node"].startswith(">=24")
-
-
-def test_mcp_dependency_is_declared_consistently_for_both_install_paths():
-    pyproject = tomllib.loads((PROJECT_ROOT / "backend" / "pyproject.toml").read_text(encoding="utf-8"))
-    project_dependencies = set(pyproject["project"]["dependencies"])
-    requirements = {
-        line.strip()
-        for line in (PROJECT_ROOT / "backend" / "requirements.txt").read_text(encoding="utf-8").splitlines()
-        if line.strip() and not line.lstrip().startswith("#")
-    }
-
-    assert "mcp>=1.28.1,<2" in project_dependencies
-    assert "mcp>=1.28.1,<2" in requirements
-
-
-def test_bootstrap_scripts_install_locked_packages_browser_and_run_doctor():
-    scripts = [
-        PROJECT_ROOT / "scripts" / "setup-browser-tools.ps1",
-        PROJECT_ROOT / "scripts" / "setup-browser-tools.sh",
-    ]
-
-    for script in scripts:
-        assert script.is_file(), f"missing bootstrap script: {script.name}"
-        body = script.read_text(encoding="utf-8").casefold()
-        assert "npm ci" in body
-        assert "agent-browser install" in body
-        assert "agent-browser doctor" in body
-        assert "npm install -g" not in body
 
 
 def test_api_image_contains_pinned_node_toolchain_and_chrome_installation():

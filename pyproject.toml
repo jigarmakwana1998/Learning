@@ -1,0 +1,28 @@
+# uv workspace: the API, its database package, and the MCP servers share one lock.
+[tool.uv.workspace]
+members = ["backend", "database", "mcp/browser"]
+
+[dependency-groups]
+dev = [
+    "pytest>=8,<10",
+    "pytest-asyncio>=0.25,<2",
+    "pytest-benchmark>=5,<6",
+    "pytest-cov>=6,<8",
+    "pytest-testmon>=2,<3",
+    "ruff>=0.11,<1",
+]
+
+[tool.ruff]
+target-version = "py312"
+line-length = 120
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["backend/tests", "mcp/browser/tests"]
+pythonpath = ["backend"]
+markers = [
+    "live_provider: requires installed and authenticated external agent CLI",
+]

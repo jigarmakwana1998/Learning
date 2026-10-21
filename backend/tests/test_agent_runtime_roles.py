@@ -4,7 +4,6 @@ from uuid import uuid4
 
 import pytest
 
-import app.harness.deep_agents as deep_agents_module
 import app.harness.runtime as runtime_module
 from app.agents.contracts import output_schema_for
 from app.core.config import Settings
@@ -41,35 +40,6 @@ def test_every_workflow_role_has_a_structured_output_contract():
     assert output_schema_for("ResearchSelector") is not None
     assert output_schema_for("ResearchSynthesisPart3") is not None
     assert output_schema_for("ResearchCoverageRound3") is not None
-
-
-@pytest.mark.asyncio
-async def test_mcp_tools_are_scoped_to_configured_roles(monkeypatch):
-    captured = []
-
-    class Client:
-        def __init__(self, connections, **kwargs):
-            captured.append((connections, kwargs))
-
-        async def get_tools(self):
-            return ["browser-tool"]
-
-    monkeypatch.setattr(deep_agents_module, "MultiServerMCPClient", Client)
-    settings = Settings(
-        agent_mcp_enabled=True,
-        agent_mcp_roles={"Researcher"},
-        mcp_servers={"browser": {"transport": "http", "url": "http://mcp.test"}},
-    )
-    runtime = DeepAgentRuntime(settings)
-
-    assert await runtime._mcp_tools("Planner") == []
-    assert await runtime._mcp_tools("Researcher") == ["browser-tool"]
-    assert captured == [
-        (
-            {"browser": {"transport": "http", "url": "http://mcp.test"}},
-            {"tool_name_prefix": True},
-        )
-    ]
 
 
 @pytest.mark.asyncio

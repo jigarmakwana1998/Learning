@@ -12,3 +12,6 @@ backend/.env
 mobile/node_modules
 /node_modules
 mobile/.env
+.venv
+mcp/browser/node_modules
+**/__pycache__

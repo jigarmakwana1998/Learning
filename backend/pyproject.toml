@@ -4,50 +4,24 @@ version = "0.4.0"
 description = "Learning Coach API"
 requires-python = ">=3.12"
 dependencies = [
-    "alembic>=1.14,<2",
-    "aiosqlite>=0.20,<1",
-    "asyncpg>=0.30,<1",
+    "browser-mcp",
     "cryptography>=50,<51",
-    "dishka>=1.6,<2",
+    "deepagents>=0.5.4,<1",
     "email-validator>=2.2,<3",
     "fastapi>=0.115,<1",
     "httpx>=0.28,<1",
-    "mcp>=1.28.1,<2",
-    # litellm>=1.103 needs mcp 2, which langchain-mcp-adapters does not support yet.
+    "langchain-litellm>=0.4,<1",
+    "langgraph-checkpoint-postgres>=3,<4",
+    "langgraph-checkpoint-sqlite>=3,<4",
+    "learning-coach-db",
+    # browser-mcp needs mcp<2; litellm>=1.103 needs mcp 2.
     "litellm>=1.95,<1.103",
-    "psycopg[binary]>=3.2,<4",
     "pydantic>=2.12,<3",
     "python-dotenv>=1,<2",
     "sqlalchemy[asyncio]>=2.0,<3",
     "uvicorn[standard]>=0.34,<1",
-    "deepagents>=0.5.4,<1",
-    "langchain-litellm>=0.4,<1",
-    "langchain-mcp-adapters>=0.2,<1",
-    "langgraph-checkpoint-postgres>=3,<4",
-    "langgraph-checkpoint-sqlite>=3,<4",
 ]
 
-[dependency-groups]
-dev = [
-    "pytest>=8,<10",
-    "pytest-asyncio>=0.25,<2",
-    "pytest-benchmark>=5,<6",
-]
-[tool.ruff]
-target-version = "py312"
-line-length = 120
-
-[tool.ruff.lint]
-select = ["E", "F", "I", "UP", "B"]
-
-[tool.ty.environment]
-python-version = "3.12"
-
-[tool.pytest.ini_options]
-asyncio_mode = "auto"
-testpaths = ["tests"]
-pythonpath = ["."]
-markers = [
-    "live_provider: requires installed and authenticated external agent CLI",
-    "integration: requires containerized infrastructure",
-]
+[tool.uv.sources]
+browser-mcp = { workspace = true }
+learning-coach-db = { workspace = true }

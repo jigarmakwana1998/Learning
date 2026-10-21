@@ -5,7 +5,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from app.models.database import AgentSessionRecord
+from learning_db.models import AgentSessionRecord
 from app.schemas.learning import LearningGoal
 from app.services.learning_service import LearningService
 
@@ -242,7 +242,7 @@ async def test_budget_exhaustion_returns_grounded_partial_research(monkeypatch):
     gateway = GapGateway()
     monkeypatch.setattr("app.services.learning_service.AgentHarness", AdaptiveHarness)
     monkeypatch.setattr(
-        "app.services.learning_service.get_settings",
+        "app.services.learning_service.browser_settings",
         lambda: SimpleNamespace(research_max_pages=1, research_max_searches=1),
     )
     service = LearningService()

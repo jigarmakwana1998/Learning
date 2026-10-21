@@ -2,7 +2,7 @@ FROM node:24-bookworm-slim@sha256:cd84903a12dbd26b46f1f3b8144a2568c41c5d37ddd0c7
 
 WORKDIR /tools
 
-COPY package.json package-lock.json ./
+COPY mcp/browser/package.json mcp/browser/package-lock.json ./
 RUN npm ci --omit=dev \
     && npm cache clean --force
 
@@ -12,7 +12,10 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
     PIP_NO_CACHE_DIR=1 \
     HOME=/home/app \
-    PATH=/opt/learning-tools/node_modules/.bin:$PATH \
+    PATH=/opt/venv/bin:/opt/learning-tools/node_modules/.bin:$PATH \
+    UV_PROJECT_ENVIRONMENT=/opt/venv \
+    UV_PYTHON_DOWNLOADS=never \
+    UV_NO_CACHE=1 \
     PUPPETEER_CACHE_DIR=/opt/agent-browser-cache \
     AGENT_BROWSER_CONTENT_BOUNDARIES=1 \
     AGENT_BROWSER_MAX_OUTPUT=6000 \
@@ -83,13 +86,16 @@ RUN apt-get update \
     && chown -R app:app /home/app /opt/learning-tools /opt/agent-browser-cache \
     && rm -rf /var/lib/apt/lists/*
 
-COPY backend/requirements.txt ./requirements.txt
-RUN pip install --no-cache-dir -r requirements.txt
-
-COPY backend/app ./app
-COPY backend/alembic ./alembic
-COPY backend/alembic.ini ./alembic.ini
-RUN chown -R app:app /app
+# uv workspace: the API plus the database and browser-MCP packages, from the lock.
+COPY pyproject.toml uv.lock ./
+COPY backend/pyproject.toml ./backend/
+COPY backend/app ./backend/app
+COPY database ./database
+COPY mcp/browser/pyproject.toml ./mcp/browser/
+COPY mcp/browser/browser_mcp ./mcp/browser/browser_mcp
+RUN pip install --no-cache-dir uv==0.11.7 \
+    && uv sync --frozen --no-dev --no-editable --package learning-coach-api \
+    && chown -R app:app /app
 
 USER app
 
@@ -100,4 +106,4 @@ RUN agent-browser --version && "$AGENT_BROWSER_EXECUTABLE_PATH" --version
 
 EXPOSE 8000
 
-CMD ["sh", "-c", "alembic upgrade head && uvicorn app.main:app --host 0.0.0.0 --port 8000"]
+CMD ["sh", "-c", "cd /app/database && alembic upgrade head && cd /app/backend && exec uvicorn app.main:app --host 0.0.0.0 --port 8000"]

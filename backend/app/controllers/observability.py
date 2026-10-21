@@ -2,9 +2,9 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.database import get_db
+from learning_db.session import get_db
 from app.core.dependencies import get_current_user
-from app.models.database import AgentRun, AgentSessionRecord, AgentTraceEvent, LearningRequest, User
+from learning_db.models import AgentRun, AgentSessionRecord, AgentTraceEvent, LearningRequest, User
 from app.schemas.observability import TraceEventResponse, TraceRunListItem, TraceRunResponse
 
 router = APIRouter(prefix="/observability", tags=["observability"])
