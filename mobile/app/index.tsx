@@ -12,11 +12,16 @@ import {
   View,
 } from "react-native";
 
-import { getMe, getResearchRun, login, logout, register, ResearchRun, startResearchRun, User } from "@/lib/api";
+import { buildCourse, Course, CourseVersion, getCourse, getCourseVersions, getMe, getResearchRun, login, logout, register, ResearchRun, Sentence, startResearchRun, User } from "@/lib/api";
 
 function openPublicUrl(url: string) {
   if (!url.startsWith("https://")) return;
   Linking.openURL(url).catch(() => Alert.alert("Could not open this source."));
+}
+
+/** Opens the source page scrolled to the quoted text (a URL text fragment). */
+function quoteLink(url: string, quote: string) {
+  return `${url.split("#")[0]}#:~:text=${encodeURIComponent(quote).replace(/-/g, "%2D")}`;
 }
 
 export default function HomeScreen() {
@@ -103,6 +108,7 @@ export default function HomeScreen() {
                 <CoverageList run={run} />
               </View>
             )}
+            {run?.status === "completed" && <CourseSection researchRunId={run.id} />}
           </>
         )}
       </ScrollView>
@@ -132,6 +138,94 @@ function CoverageList({ run }: { run: ResearchRun }) {
           </View>
         );
       })}
+    </View>
+  );
+}
+
+function CourseSection({ researchRunId }: { researchRunId: string }) {
+  const [versions, setVersions] = useState<CourseVersion[]>([]);
+  const [course, setCourse] = useState<Course | null>(null);
+  const [starting, setStarting] = useState(false);
+
+  const show = (id: string) => getCourse(id).then(setCourse).catch(() => undefined);
+  const refresh = () => getCourseVersions(researchRunId).then((list) => { setVersions(list); return list; });
+  useEffect(() => { refresh().then((list) => list[0] && show(list[0].id)).catch(() => undefined); }, [researchRunId]);
+
+  // Poll while the agent writes so sections appear as they arrive.
+  useEffect(() => {
+    if (course?.status !== "running") { refresh().catch(() => undefined); return; }
+    const timer = setTimeout(() => show(course.id), 2000);
+    return () => clearTimeout(timer);
+  }, [course]);
+
+  async function start() {
+    setStarting(true);
+    try {
+      await show((await buildCourse(researchRunId)).id);
+    } catch (error) {
+      Alert.alert("Could not build the course", error instanceof Error ? error.message : "Please try again.");
+    } finally {
+      setStarting(false);
+    }
+  }
+
+  const busy = starting || course?.status === "running";
+  return (
+    <View style={styles.courseShell}>
+      <Text style={styles.cardTitle}>Course</Text>
+      <Pressable accessibilityRole="button" onPress={start} disabled={busy} style={({ pressed }) => [styles.primaryButton, pressed && styles.pressed, busy && styles.disabled]}>
+        {busy ? <ActivityIndicator color="#fff" /> : <Text style={styles.primaryButtonText}>{versions.length ? "Build new version" : "Build course"}</Text>}
+      </Pressable>
+      {versions.length > 0 && <ScrollView horizontal contentContainerStyle={styles.versionRow}>
+        {versions.map((v) => <Pressable key={v.id} accessibilityRole="button" accessibilityState={{ selected: v.id === course?.id }} onPress={() => show(v.id)} style={[styles.versionChip, v.id === course?.id && styles.versionChipActive]}>
+          <Text style={v.id === course?.id ? styles.versionTextActive : styles.versionText}>v{v.version} · {v.status}</Text>
+        </Pressable>)}
+      </ScrollView>}
+      {course && <CourseBody course={course} />}
+    </View>
+  );
+}
+
+function CourseBody({ course }: { course: Course }) {
+  const source = (passage: string) => course.sources.find((item) => item.id === passage.split(".")[0]);
+  return (
+    <View style={styles.sectionStack}>
+      {course.status === "running" && <View style={styles.visitHeader}><ActivityIndicator color="#6657d9" /><Text style={[styles.bodyMuted, styles.signedIn]} numberOfLines={2}>{course.activity ?? "Reading the sources..."}</Text></View>}
+      {course.status === "failed" && <Text style={styles.error}>{course.error ?? "The course could not be built."}</Text>}
+      {course.chapters.map((chapter, c) => (
+        <View key={chapter.id} style={styles.module}>
+          <Text style={styles.kicker}>CHAPTER {c + 1}</Text>
+          <Text style={styles.sectionTitle}>{chapter.title}</Text>
+          {chapter.sections.map((section) => (
+            <View key={section.id} style={styles.lesson}>
+              <Text style={styles.label}>{section.title}</Text>
+              {course.sections[section.id]?.map((paragraph, p) => <CourseParagraph key={p} sentences={paragraph} source={source} />)
+                ?? <Text style={styles.empty}>{course.status === "running" ? "Writing..." : "Not written."}</Text>}
+            </View>
+          ))}
+        </View>
+      ))}
+      {course.gaps.length > 0 && <View style={styles.module}><Text style={styles.label}>Not covered by the sources</Text>{course.gaps.map((gap) => <Text key={gap} style={styles.bullet}>• {gap}</Text>)}</View>}
+      {course.sources.length > 0 && <View style={styles.module}><Text style={styles.label}>Sources</Text>{course.sources.map((item) => (
+        <Pressable key={item.id} accessibilityRole="link" onPress={() => openPublicUrl(item.url)} style={styles.sourceLink}><Text style={styles.sourceLinkText}>{item.id.slice(1)}. {item.title}</Text></Pressable>
+      ))}</View>}
+    </View>
+  );
+}
+
+function CourseParagraph({ sentences, source }: { sentences: Sentence[]; source: (passage: string) => Course["sources"][number] | undefined }) {
+  return (
+    <View style={styles.module}>
+      <Text style={styles.paragraph}>{sentences.map((sentence, i) => (
+        <Text key={i} style={sentence.warning ? styles.warned : undefined}>
+          {sentence.text}
+          {sentence.cites.map((cite, k) => {
+            const page = source(cite.passage);
+            return page ? <Text key={k} accessibilityRole="link" onPress={() => openPublicUrl(quoteLink(page.url, cite.quote))} style={styles.cite}> [{cite.passage.slice(1).split(".")[0]}]</Text> : null;
+          })}{" "}
+        </Text>
+      ))}</Text>
+      {sentences.filter((s) => s.warning).map((s, i) => <Text key={i} style={styles.warningText}>⚠ {s.warning} ({s.text})</Text>)}
     </View>
   );
 }
@@ -168,4 +262,13 @@ const styles = StyleSheet.create({
   empty: { backgroundColor: "#f3f1f7", borderRadius: 12, padding: 14, color: "#686579", lineHeight: 21 },
   visitHeader: { flexDirection: "row", justifyContent: "space-between", alignItems: "center", gap: 8 },
   error: { backgroundColor: "#fff0f0", borderColor: "#d45b5b", borderWidth: 1, borderRadius: 12, padding: 14 },
+  versionRow: { gap: 8 },
+  versionChip: { minHeight: 44, justifyContent: "center", borderRadius: 12, paddingHorizontal: 14, backgroundColor: "#f3f1f7" },
+  versionChipActive: { backgroundColor: "#6657d9" },
+  versionText: { color: "#332f46", fontWeight: "700" },
+  versionTextActive: { color: "#fff", fontWeight: "700" },
+  paragraph: { color: "#28243b", fontSize: 16, lineHeight: 25 },
+  cite: { color: "#4b3fc1", fontWeight: "700" },
+  warned: { backgroundColor: "#fdecc8" },
+  warningText: { color: "#8a5a00", fontSize: 12, lineHeight: 18 },
 });
