@@ -1,6 +1,6 @@
 import pytest
 
-from app.schemas.learning import LearningGoal, ResearchBrief, ResearchCoverage, Source
+from app.schemas.learning import CurriculumModule, LearningGoal, ResearchBrief, ResearchCoverage, Source
 from app.services.learning_service import LearningService
 
 
@@ -304,14 +304,19 @@ def test_planner_schema_minimums_name_the_failing_field(field, change):
         )
 
 
-def test_planner_must_fit_the_course_budget():
+def test_time_budget_overrun_is_a_warning_not_a_failure():
     goal = LearningGoal(topic="Python functions", weeks=1, hours_per_week=1)
-    research = _covered_research()
-
-    with pytest.raises(ValueError, match="over the learner's 60-minute budget"):
-        LearningService._planned_modules(
-            goal, _chapters([_section(["foundations"]), _section(["mechanism"])]), research
+    modules = [
+        CurriculumModule.model_validate(module)
+        for module in LearningService._planned_modules(
+            goal, _chapters([_section(["foundations"]), _section(["mechanism"])]), _covered_research()
         )
+    ]
+
+    assert LearningService._time_budget_warnings(goal, modules) == [
+        "Planned sections total 90 minutes, over the 60-minute budget (1 weeks x 1 h)."
+    ]
+    assert LearningService._time_budget_warnings(goal.model_copy(update={"hours_per_week": 2}), modules) == []
 
 
 def test_planner_rejects_the_old_curriculum_and_assessment_payload():
