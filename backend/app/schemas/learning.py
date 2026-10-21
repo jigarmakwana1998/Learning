@@ -88,7 +88,8 @@ class Lesson(BaseModel):
     section_plan: list[str] = Field(default_factory=list, max_length=7)
     content: str = ""
     paragraphs: list[LessonParagraph] = Field(default_factory=list)
-    practice: str
+    # Practice comes from the assessment step; generated courses leave it empty for now.
+    practice: str = ""
     estimated_minutes: int = Field(ge=5, le=240)
     # Provider output is validated and populated from paragraph citations when omitted.
     source_urls: list[str] = Field(default_factory=list)
@@ -131,7 +132,8 @@ class LearningRun(BaseModel):
     research: ResearchBrief
     curriculum: list[CurriculumModule]
     course: Course | None = None
-    assessment: Assessment
+    # Filled by the assessment agent; None until that step exists.
+    assessment: Assessment | None = None
     sessions: dict[str, str]
 
 

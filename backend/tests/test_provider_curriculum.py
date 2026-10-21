@@ -82,38 +82,6 @@ def _planner_output(*, module_urls: list[str] | None = None, lessons: list[dict]
     }
 
 
-def _assessment_output() -> dict:
-    return {
-        "assessment": {
-            "quiz_items": [
-                {
-                    "id": "week-1-q1",
-                    "module_week": 1,
-                    "prompt": "What does a Python function return to its caller?",
-                    "choices": ["The evaluated return value", "Only printed text", "A new global variable"],
-                    "correct_answer": "The evaluated return value",
-                    "explanation": "The return statement passes an evaluated value back to the calling expression.",
-                },
-                {
-                    "id": "week-1-q2",
-                    "module_week": 1,
-                    "prompt": "Which observation best validates a function boundary case?",
-                    "choices": ["The exact result for the smallest valid input", "The function name", "The file size"],
-                    "correct_answer": "The exact result for the smallest valid input",
-                    "explanation": "Comparing a boundary input's observed result with its expected result tests the stated contract.",
-                },
-            ],
-            "assignment": {
-                "title": "Function contract notebook",
-                "prompt": "Implement two functions and document their inputs, outputs, boundary cases, observed evidence, and one revision.",
-                "deliverables": ["Two executable function implementations", "A table of predicted and observed outputs"],
-                "rubric": ["Each function contract is precise", "Observed evidence supports every conclusion"],
-            },
-            "project": "Build a reusable Python module and validate each public function contract with recorded boundary evidence.",
-        }
-    }
-
-
 def _covered_research() -> ResearchBrief:
     research = _research()
     return research.model_copy(
@@ -156,10 +124,9 @@ def _traced_lesson(identifier: str, coverage_id: str, source_url: str) -> dict:
     return lesson
 
 
-def test_provider_course_preserves_authored_content_and_normalizes_verified_citations():
+def test_provider_course_preserves_authored_content_and_derives_chapter_sources():
     research = _research()
     output = _planner_output(
-        module_urls=["HTTPS://DOCS.EXAMPLE.COM/source-0#section"],
         lessons=[
             _lesson("one"),
             _lesson("two", source_urls=["https://docs.example.com/source-1#example"]),
@@ -173,28 +140,21 @@ def test_provider_course_preserves_authored_content_and_normalizes_verified_cita
     )
 
     module = curriculum[0]
-    assert module.source_urls == ["https://docs.example.com/source-0"]
-    assert module.lessons[0].content.startswith("Paragraph 0 for one")
-    assert module.lessons[0].source_urls == [
+    # A chapter's sources are exactly what its sections cite, normalized.
+    assert module.source_urls == [
         "https://docs.example.com/source-0",
         "https://docs.example.com/source-1",
     ]
+    assert module.lessons[0].content.startswith("Paragraph 0 for one")
     assert module.lessons[1].source_urls == [
         "https://docs.example.com/source-1",
         "https://docs.example.com/source-0",
     ]
 
 
-def test_provider_course_rejects_any_unverified_module_or_lesson_citation():
+def test_provider_course_rejects_unverified_lesson_citations_and_empty_chapters():
     goal = LearningGoal(topic="Python functions", weeks=1, hours_per_week=3)
     research = _research()
-
-    with pytest.raises(ValueError, match="unverified source URL in module week 1"):
-        LearningService._provider_curriculum(
-            goal,
-            _planner_output(module_urls=["https://unverified.example.com/source"]),
-            research,
-        )
 
     with pytest.raises(ValueError, match="unverified source URL in lesson two"):
         LearningService._provider_curriculum(
@@ -208,51 +168,8 @@ def test_provider_course_rejects_any_unverified_module_or_lesson_citation():
             research,
         )
 
-
-def test_provider_course_rejects_incomplete_content_instead_of_inserting_generic_lessons():
-    with pytest.raises(ValueError, match="at least two complete lessons"):
-        LearningService._provider_curriculum(
-            LearningGoal(topic="Python functions", weeks=1, hours_per_week=3),
-            _planner_output(lessons=[]),
-            _research(),
-        )
-
-
-def test_provider_course_requires_exact_requested_progression_and_weekly_budget():
-    research = _research()
-    goal = LearningGoal(topic="Python functions", weeks=2, hours_per_week=1)
-
-    with pytest.raises(ValueError, match="exactly one module for each week"):
-        LearningService._provider_curriculum(goal, _planner_output(), research)
-
-    with pytest.raises(ValueError, match="weekly-hour budget"):
-        LearningService._provider_curriculum(
-            LearningGoal(topic="Python functions", weeks=1, hours_per_week=1),
-            _planner_output(),
-            research,
-        )
-
-
-def test_provider_modules_allow_the_relevant_verified_source_and_bound_lesson_time():
-    research = _research()
-    goal = LearningGoal(topic="Python functions", weeks=1, hours_per_week=3)
-
-    modules = LearningService._provider_curriculum(
-        goal,
-        _planner_output(module_urls=["https://docs.example.com/source-3"]),
-        research,
-    )
-    assert modules[0].source_urls == ["https://docs.example.com/source-3"]
-
-    long_lessons = [_lesson("one"), _lesson("two")]
-    for lesson in long_lessons:
-        lesson["estimated_minutes"] = 100
-    with pytest.raises(ValueError, match="lesson time exceeds"):
-        LearningService._provider_curriculum(
-            goal,
-            _planner_output(lessons=long_lessons),
-            research,
-        )
+    with pytest.raises(ValueError, match="at least one section"):
+        LearningService._provider_curriculum(goal, _planner_output(lessons=[]), research)
 
 
 def test_provider_curriculum_proves_every_research_requirement_reaches_cited_lessons():
@@ -313,55 +230,74 @@ def test_course_generation_gate_rejects_partial_research():
         LearningService._require_complete_research(research)
 
 
-def test_provider_assessment_preserves_authored_quiz_assignment_and_answer_keys():
-    assessment = LearningService._provider_assessment(
-        LearningGoal(topic="Python functions", weeks=1),
-        _assessment_output(),
-    )
-
-    assert len(assessment.quiz_items) == 2
-    assert assessment.quiz == assessment.quiz_items
-    assert assessment.quiz_items[0].correct_answer == "The evaluated return value"
-    assert assessment.assignment.title == "Function contract notebook"
-    assert assessment.project.startswith("Build a reusable Python module")
-
-
-def test_provider_assessment_normalizes_labeled_rubric_object():
-    output = _assessment_output()
-    output["assessment"]["assignment"]["rubric"] = {
-        "Accuracy": "Every conclusion matches the recorded evidence",
-        "Completeness": "Every required artifact is present",
-    }
-    output["assessment"]["project"] = {
-        "title": "Function behavior capstone",
-        "description": "Build and validate a reusable module with documented evidence",
+def _section(coverage_ids: list[str], *, minutes: int = 45, points: int = 6) -> dict:
+    return {
+        "title": f"Section on {' and '.join(coverage_ids)}",
+        "objective": f"Explain {' and '.join(coverage_ids)} with a worked example.",
+        "coverage_ids": coverage_ids,
+        "key_points": [f"Distinct point {index} about {coverage_ids[0]}" for index in range(points)],
+        "estimated_minutes": minutes,
     }
 
-    assessment = LearningService._provider_assessment(
-        LearningGoal(topic="Python functions", weeks=1), output
-    )
 
-    assert assessment.assignment.rubric == [
-        "Accuracy: Every conclusion matches the recorded evidence",
-        "Completeness: Every required artifact is present",
-    ]
-    assert assessment.project == (
-        "Function behavior capstone. Build and validate a reusable module with documented evidence."
-    )
+def _chapters(*sections_per_chapter: list[dict]) -> dict:
+    return {
+        "chapters": [
+            {
+                "title": f"Chapter {index}",
+                "summary": f"Chapter {index} builds one coherent part of the function model.",
+                "sections": sections,
+            }
+            for index, sections in enumerate(sections_per_chapter, start=1)
+        ]
+    }
 
 
-def test_provider_assessment_rejects_missing_or_generic_content():
-    goal = LearningGoal(topic="Python functions", weeks=1)
+def test_planner_chapters_become_modules_and_sections_become_lesson_drafts():
+    goal = LearningGoal(topic="Python functions", weeks=1, hours_per_week=3)
+    plan = _chapters([_section(["foundations"], points=4)], [_section(["mechanism"], minutes=60), _section(["mechanism"])])
+    plan["chapters"][1]["title"] = "Chapter 2: Mechanism"
 
-    with pytest.raises(ValueError, match="assessment object"):
-        LearningService._provider_assessment(goal, {})
+    modules = LearningService._planned_modules(goal, plan, _covered_research())
 
-    invalid = _assessment_output()
-    invalid["assessment"]["quiz_items"][0]["correct_answer"] = "Invented choice"
-    with pytest.raises(ValueError, match="correct_answer in choices"):
-        LearningService._provider_assessment(goal, invalid)
+    assert [module["week"] for module in modules] == [1, 2]
+    assert [module["title"] for module in modules] == ["Chapter 1", "Mechanism"]  # model numbering stripped
+    assert len(modules[0]["lessons"][0]["section_plan"]) == 4
+    second = modules[1]
+    assert [lesson["id"] for lesson in second["lessons"]] == ["chapter-2-section-1", "chapter-2-section-2"]
+    assert second["coverage_ids"] == ["mechanism"]
+    assert second["estimated_hours"] == 2  # 105 minutes rounds up
+    lesson = second["lessons"][0]
+    assert lesson["section_plan"] == plan["chapters"][1]["sections"][0]["key_points"]
+    assert lesson["paragraphs"] == [] and "practice" not in lesson
 
-    too_few = _assessment_output()
-    too_few["assessment"]["quiz_items"] = too_few["assessment"]["quiz_items"][:1]
-    with pytest.raises(ValueError, match="2-5 quiz questions per week"):
-        LearningService._provider_assessment(goal, too_few)
+
+def test_planner_rejects_unknown_or_unassigned_coverage():
+    goal = LearningGoal(topic="Python functions", weeks=1, hours_per_week=3)
+    research = _covered_research()
+
+    with pytest.raises(ValueError, match="research did not cover: invented"):
+        LearningService._planned_modules(goal, _chapters([_section(["foundations", "invented"])]), research)
+    with pytest.raises(ValueError, match="without a section: mechanism"):
+        LearningService._planned_modules(goal, _chapters([_section(["foundations"])]), research)
+
+
+def test_planner_needs_distinct_key_points_and_fits_the_course_budget():
+    goal = LearningGoal(topic="Python functions", weeks=1, hours_per_week=1)
+    research = _covered_research()
+
+    with pytest.raises(ValueError, match="at least one key point"):
+        LearningService._planned_modules(
+            goal, _chapters([_section(["foundations"], points=0), _section(["mechanism"])]), research
+        )
+    with pytest.raises(ValueError, match="over the learner's 60-minute budget"):
+        LearningService._planned_modules(
+            goal, _chapters([_section(["foundations"]), _section(["mechanism"])]), research
+        )
+
+
+def test_planner_rejects_the_old_curriculum_and_assessment_payload():
+    goal = LearningGoal(topic="Python functions", weeks=1, hours_per_week=3)
+
+    with pytest.raises(ValueError, match="invalid chapter structure"):
+        LearningService._planned_modules(goal, {"curriculum": [], "assessment": {}}, _covered_research())

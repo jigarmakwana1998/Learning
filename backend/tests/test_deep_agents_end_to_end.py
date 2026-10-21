@@ -131,50 +131,22 @@ elif agent == 'ResearchCoverageEvaluator':
         'sufficient': len(linked) == len(requirements), 'reason': 'Coverage was evaluated.'
     }
 elif agent == 'Planner':
-    curriculum = [{'week': 1, 'title': 'Function foundations',
-                   'outcomes': ['Define and call a function', 'Validate a result'],
-                   'coverage_ids': ['foundations', 'mechanism', 'examples', 'boundaries', 'integration'],
-                   'source_urls': [source['url'] for source in sources[:5]],
-                   'overview': 'Build a precise mental model of Python functions, then apply it to observable examples.',
-                   'estimated_hours': 3,
-                   'lessons': [
-                     {'id': 'provider-functions-concepts', 'title': 'Function inputs and outputs',
-                      'objective': 'Explain how parameters bind inputs and return values expose outputs.',
-                      'coverage_ids': ['foundations', 'mechanism', 'examples'],
-                      'section_plan': [f'Concept teaching section {index}' for index in range(6)],
-                      'paragraphs': [],
-                      'practice': 'Implement double and three related functions, then record inputs, predicted outputs, and actual outputs.',
-                      'estimated_minutes': 60, 'source_urls': [source['url'] for source in sources[:3]]},
-                     {'id': 'provider-functions-validation', 'title': 'Validate function behavior',
-                      'objective': 'Use representative and boundary examples to validate a function result.',
-                      'coverage_ids': ['boundaries', 'integration'],
-                      'section_plan': [f'Validation teaching section {index}' for index in range(6)],
-                      'paragraphs': [],
-                      'practice': 'Write three executable checks for one function and explain what each check demonstrates about its contract.',
-                      'estimated_minutes': 60, 'source_urls': [source['url'] for source in sources[3:5]]}
-                   ]}]
-    assessment = {
-        'quiz_items': [
-            {'id': 'week-1-q1', 'module_week': 1,
-             'prompt': 'What observable behavior distinguishes returning a value from printing it?',
-             'choices': ['The caller receives the returned value', 'Both always change global state', 'Printing creates a parameter'],
-             'correct_answer': 'The caller receives the returned value',
-             'explanation': 'A return expression passes a value to the caller, while printing only writes text to an output stream.'},
-            {'id': 'week-1-q2', 'module_week': 1,
-             'prompt': 'Which test best checks a function contract at a boundary?',
-             'choices': ['Use the smallest valid input and compare the exact result', 'Rename the function', 'Skip invalid inputs'],
-             'correct_answer': 'Use the smallest valid input and compare the exact result',
-             'explanation': 'A boundary example tests the edge of the stated contract and compares an observable result with an expectation.'},
+    response = {'chapters': [{
+        'title': 'Function foundations',
+        'summary': 'Build a precise mental model of Python functions, then apply it to observable examples.',
+        'sections': [
+            {'title': 'Function inputs and outputs',
+             'objective': 'Explain how parameters bind inputs and return values expose outputs.',
+             'coverage_ids': ['foundations', 'mechanism', 'examples'],
+             'key_points': [f'Concept teaching section {index}' for index in range(6)],
+             'estimated_minutes': 60},
+            {'title': 'Validate function behavior',
+             'objective': 'Use representative and boundary examples to validate a function result.',
+             'coverage_ids': ['boundaries', 'integration'],
+             'key_points': [f'Validation teaching section {index}' for index in range(6)],
+             'estimated_minutes': 60},
         ],
-        'assignment': {
-            'title': 'Function contract evidence notebook',
-            'prompt': 'Implement two related Python functions and document their contracts, boundary examples, observed results, and one evidence-based revision.',
-            'deliverables': ['Two executable function implementations', 'A table of predicted and observed results'],
-            'rubric': ['Function contracts are stated precisely', 'Recorded evidence supports every claimed result'],
-        },
-        'project': 'Build a small reusable Python module, validate its public function contracts, and explain the evidence behind each design decision.',
-    }
-    response = {'curriculum': curriculum, 'assessment': assessment}
+    }]}
 elif agent == 'LessonWriter':
     draft = request['context']['lesson_draft']
     target_urls = {
@@ -298,17 +270,17 @@ def test_fake_browser_and_deep_agent_generate_complete_course(tmp_path, monkeypa
                 set(lesson["source_urls"]) <= verified_urls
                 for lesson in course["course"]["modules"][0]["lessons"]
             )
-            assert course["assessment"]["quiz_items"]
-            assert course["assessment"]["assignment"]["deliverables"]
+            assert course.get("assessment") is None  # generated by a later assessment step
             assert set(course["sessions"]) == {
                 "Researcher", "Planner",
-                "LessonWriter:provider-functions-concepts",
-                "LessonWriter:provider-functions-validation",
+                "LessonWriter:chapter-1-section-1",
+                "LessonWriter:chapter-1-section-2",
             }
-            assert all(
-                "correct_answer" not in question and "explanation" not in question
-                for question in course["assessment"]["quiz_items"]
-            )
+            module = course["course"]["modules"][0]
+            assert module["title"] == "Function foundations"
+            assert [lesson["title"] for lesson in module["lessons"]] == [
+                "Function inputs and outputs", "Validate function behavior",
+            ]
 
             saved = client.get(f"/learning-runs/{course['id']}", headers=learner)
             assert saved.status_code == 200, saved.text
@@ -346,17 +318,12 @@ def test_fake_browser_and_deep_agent_generate_complete_course(tmp_path, monkeypa
             assert progress.status_code == 200, progress.text
             assert progress.json()["completed_lessons"] == 1
 
-            answers = [
-                {"question_id": question["id"], "answer": question["choices"][0]}
-                for question in course["assessment"]["quiz_items"]
-            ]
             quiz = client.post(
                 f"/learning-runs/{course['id']}/quiz-submissions",
                 headers=learner,
-                json={"quiz_id": "course-quiz", "answers": answers},
+                json={"quiz_id": "course-quiz", "answers": [{"question_id": "q1", "answer": "a"}]},
             )
-            assert quiz.status_code == 200, quiz.text
-            assert quiz.json()["score_percent"] == 100
+            assert quiz.status_code == 422 and "no quiz yet" in quiz.json()["detail"]
 
             submission = client.post(
                 f"/learning-runs/{course['id']}/submissions",
@@ -366,8 +333,7 @@ def test_fake_browser_and_deep_agent_generate_complete_course(tmp_path, monkeypa
                     "response": "I implemented both functions, recorded boundary predictions and outputs, then revised input validation based on the observed evidence.",
                 },
             )
-            assert submission.status_code == 200, submission.text
-            assert submission.json()["feedback"]
+            assert submission.status_code == 409 and "no assignment yet" in submission.json()["detail"]
 
             repeated_progress = client.patch(
                 f"/learning-runs/{course['id']}/progress",

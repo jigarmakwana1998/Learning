@@ -146,7 +146,10 @@ async def submit_quiz(run_id: str, payload: QuizSubmissionRequest, db: AsyncSess
 @router.post("/{run_id}/submissions", response_model=AssignmentSubmissionResponse)
 async def submit_work(run_id: str, payload: WorkSubmissionRequest, db: AsyncSession = Depends(get_db), user: User = Depends(get_current_user)) -> AssignmentSubmissionResponse:
     run = await _owned_run_or_404(run_id, db, user)
-    return await learning_service.submit_work(db, user, run, payload.kind, payload.response)
+    try:
+        return await learning_service.submit_work(db, user, run, payload.kind, payload.response)
+    except ValueError as error:
+        raise HTTPException(status_code=409, detail=str(error)) from error
 
 
 @router.post("/{run_id}/assignment-submissions", response_model=AssignmentSubmissionResponse)
@@ -155,7 +158,10 @@ async def submit_assignment_legacy(run_id: str, payload: WorkSubmissionRequest, 
     run = await _owned_run_or_404(run_id, db, user)
     if payload.kind != "assignment":
         raise HTTPException(status_code=422, detail="This endpoint only accepts assignment submissions")
-    return await learning_service.submit_work(db, user, run, payload.kind, payload.response)
+    try:
+        return await learning_service.submit_work(db, user, run, payload.kind, payload.response)
+    except ValueError as error:
+        raise HTTPException(status_code=409, detail=str(error)) from error
 
 
 @router.post("/{run_id}/evaluation", response_model=EvaluationResponse)

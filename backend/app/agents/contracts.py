@@ -2,12 +2,28 @@ from typing import Literal
 
 from pydantic import BaseModel, Field
 
-from app.schemas.learning import Assessment, CurriculumModule, LessonParagraph
+from app.schemas.learning import LessonParagraph
+
+
+class PlannedSection(BaseModel):
+    title: str
+    objective: str
+    coverage_ids: list[str]
+    key_points: list[str]
+    estimated_minutes: int
+
+
+class PlannedChapter(BaseModel):
+    title: str
+    summary: str
+    sections: list[PlannedSection]
 
 
 class PlannerOutput(BaseModel):
-    curriculum: list[CurriculumModule]
-    assessment: Assessment
+    """Course structure only: chapters and their sections. Lesson text, sources, and
+    assessments are produced by later agents."""
+
+    chapters: list[PlannedChapter]
 
 
 class LessonExpansion(BaseModel):

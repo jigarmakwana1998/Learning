@@ -160,7 +160,7 @@ function LessonList({ plan, sourcesByUrl }: { plan: LearningRun; sourcesByUrl: M
     <View style={styles.sectionStack}>
       {plan.curriculum.map((module) => (
         <View key={module.week} style={styles.module}>
-          <Text style={styles.kicker}>MODULE {module.week}</Text>
+          <Text style={styles.kicker}>CHAPTER {module.week}</Text>
           <Text style={styles.sectionTitle}>{module.title}</Text>
           {module.overview ? <Text style={styles.bodyMuted}>{module.overview}</Text> : null}
           {(module.lessons ?? []).map((lesson) => (
@@ -179,15 +179,17 @@ function LessonList({ plan, sourcesByUrl }: { plan: LearningRun; sourcesByUrl: M
                   ))}
                 </View>
               ))}
-              <View style={styles.practice}>
-                <Text style={styles.practiceTitle}>Practice</Text>
-                <Text style={styles.body}>{lesson.practice}</Text>
-              </View>
+              {lesson.practice ? (
+                <View style={styles.practice}>
+                  <Text style={styles.practiceTitle}>Practice</Text>
+                  <Text style={styles.body}>{lesson.practice}</Text>
+                </View>
+              ) : null}
             </View>
           ))}
         </View>
       ))}
-      <View style={styles.practice}>
+      {plan.assessment ? <View style={styles.practice}>
         <Text style={styles.practiceTitle}>Assignment</Text>
         <Text style={styles.lessonTitle}>{plan.assessment.assignment.title}</Text>
         <Text style={styles.body}>{plan.assessment.assignment.prompt}</Text>
@@ -197,7 +199,7 @@ function LessonList({ plan, sourcesByUrl }: { plan: LearningRun; sourcesByUrl: M
         {plan.assessment.assignment.rubric.map((item) => <Text key={item} style={styles.bullet}>• {item}</Text>)}
         <Text style={styles.practiceTitle}>Project</Text>
         <Text style={styles.body}>{plan.assessment.project}</Text>
-      </View>
+      </View> : null}
     </View>
   );
 }
