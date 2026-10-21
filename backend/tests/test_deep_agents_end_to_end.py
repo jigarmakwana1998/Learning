@@ -1,22 +1,26 @@
-"""Deterministic end-to-end proof of the browser/Deep Agents learning workflow."""
-
-# ruff: noqa: E501
+"""The real Deep Agents graph, driven by a scripted model, researching through a fake browser."""
 
 from __future__ import annotations
 
 import asyncio
-import json
 import sys
+from contextlib import asynccontextmanager
 from pathlib import Path
 from uuid import uuid4
 
 from fastapi.testclient import TestClient
+from langchain_core.messages import AIMessage
+from langchain_core.outputs import ChatGeneration, ChatResult
+from langchain_core.tools import StructuredTool
+from langchain_litellm import ChatLiteLLM
 
+from app.agents.researcher import browser_tools
+from app.main import app
+from app.services.research_service import research_service
 from browser_mcp.client import AgentBrowserClient
 from browser_mcp.gateway import BrowserGateway
-from app.harness.deep_agents import DeepAgentExecution
-from app.main import app
-from app.services.learning_service import learning_service
+
+READ_URL = "https://docs.example.com/source-0"
 
 
 def _public_resolver(_host, port, *, type):
@@ -33,9 +37,9 @@ for item in commands:
     if item[:2] == ['get', 'url']:
         result = {'origin': opened, 'url': opened}
     elif item[:2] == ['get', 'title']:
-        result = {'title': 'Verified source'}
+        result = {'title': 'Defining functions'}
     elif item[:3] == ['get', 'text', 'body']:
-        result = {'content': 'A bounded, browser-rendered source body.'}
+        result = {'content': 'A def statement binds a name to a function object.'}
     elif item[0] == 'close':
         result = {'closed': True}
     else:
@@ -47,104 +51,45 @@ print(json.dumps(results))
     )
 
 
-def _write_fake_model(path: Path) -> None:
-    path.write_text(
-        """import json, sys
-prompt = sys.stdin.read() or sys.argv[-1]
-request = json.loads(prompt)
-agent = request.get('agent')
-sources = [
-    {'title': f'Source {index}', 'url': f'https://docs.example.com/source-{index}',
-     'kind': ['documentation', 'paper', 'book', 'lecture', 'slides', 'article', 'repository'][index % 7],
-     'rationale': f'Verified evidence for curriculum section {index}',
-     'key_points': [f'Concrete mechanism supported by source {index}',
-                    f'Worked example or limitation supported by source {index}']}
-    for index in range(12)
-]
-if agent == 'ResearchQueryPlanner':
-    requirements = [
-        ('foundations', 'Which definitions and prerequisites ground Python functions?', 'core'),
-        ('mechanism', 'How do Python functions bind inputs and return outputs?', 'core'),
-        ('examples', 'Which worked examples reveal Python function behavior?', 'core'),
-        ('boundaries', 'Which limitations and boundary cases constrain Python functions?', 'supporting'),
-        ('integration', 'How do Python functions connect to wider program design?', 'core'),
-    ]
-    response = {
-        'coverage_requirements': [
-            {'id': identifier, 'question': question, 'priority': priority,
-             'depth': 'detailed', 'evidence_policy': 'single_source_ok'}
-            for identifier, question, priority in requirements
-        ],
-        'queries': [
-            {'query': f'Python functions {identifier} authoritative guide',
-             'purpose': f'Cover {identifier}', 'coverage_ids': [identifier]}
-            for identifier, _question, _priority in requirements
-        ],
-        'seed_candidates': [
-            {'title': sources[index]['title'], 'url': sources[index]['url'],
-             'purpose': f'Canonical evidence for {identifier}',
-             'coverage_ids': [identifier], 'kind': sources[index]['kind']}
-            for index, (identifier, _question, _priority) in enumerate(requirements)
-        ],
-    }
-elif agent == 'ResearchSelector':
-    candidates = request['context']['candidates']
-    response = {'selections': [
-        {'url': item['url'], 'kind': sources[index]['kind'], 'reason': f'Coverage reason {index}'}
-        for index, item in enumerate(candidates[:request['context']['max_selections']])
-    ]}
-elif agent == 'ResearchSynthesis':
-    pages = request['context']['pages']
-    requirement_ids = ['foundations', 'mechanism', 'examples', 'boundaries', 'integration']
-    response = {
-        'topic': request['learner_goal']['topic'],
-        'sources': [
-            {
-                'title': page['title'], 'url': page['url'], 'kind': sources[index]['kind'],
-                'rationale': f'Verified evidence for curriculum section {index}',
-                'key_points': [f'Concrete mechanism supported by source {index}',
-                               f'Worked example or limitation supported by source {index}'],
-                'coverage_evidence': [{
-                    'requirement_id': requirement_ids[int(page['url'].split('source-')[1])],
-                    'support': 'strong'
-                }],
-            }
-            for index, page in enumerate(pages)
-        ],
-    }
-elif agent == 'ResearchCoverageEvaluator':
-    requirements = request['context']['coverage_requirements']
-    linked = {
-        evidence['requirement_id']: source['url']
-        for source in request['context']['sources']
-        for evidence in source.get('coverage_evidence', [])
-    }
-    response = {
-        'assessments': [
-            {'requirement_id': item['id'],
-             'status': 'covered' if item['id'] in linked else 'missing',
-             'confidence': 0.98 if item['id'] in linked else 0,
-             'supported_by': [linked[item['id']]] if item['id'] in linked else [],
-             'rationale': f"Evidence for {item['id']} was evaluated."}
-            for item in requirements
-        ],
-        'sufficient': len(linked) == len(requirements), 'reason': 'Coverage was evaluated.'
-    }
-else:
-    raise SystemExit(f'Unexpected agent role: {agent}')
-print(json.dumps({'response': json.dumps(response)}))
-""",
-        encoding="utf-8",
-    )
+def _call(name: str, args: dict) -> AIMessage:
+    return AIMessage(content="", tool_calls=[{"name": name, "args": args, "id": uuid4().hex}])
 
 
-def _headers(client: TestClient, email: str, password: str) -> dict[str, str]:
-    response = client.post("/auth/login", json={"email": email, "password": password})
-    assert response.status_code == 200, response.text
-    return {"Authorization": f"Bearer {response.json()['access_token']}"}
+def _page(url: str) -> dict:
+    return {
+        "url": url,
+        "title": "Defining functions",
+        "kind": "documentation",
+        "why": "Shows how def statements define and name functions.",
+        "key_points": ["A def statement binds a name to a function object."],
+        "covers": ["basics"],
+    }
 
 
-def test_fake_browser_and_deep_agent_research_a_topic(tmp_path, monkeypatch):
+class ScriptedModel(ChatLiteLLM):
+    """A LiteLLM model (so the litellm harness profile applies) that replays a fixed conversation."""
+
+    async def _agenerate(self, messages, stop=None, run_manager=None, **kwargs):
+        offered.append(sorted(tool["function"]["name"] for tool in kwargs.get("tools", [])))
+        replies.append(messages[-1].content)
+        step = script.pop(0)
+        return ChatResult(generations=[ChatGeneration(message=step() if callable(step) else step)])
+
+
+offered: list[list[str]] = []
+replies: list[str] = []
+script: list = []
+live_snapshots: list[int] = []
+
+
+def _snapshot_then(message: AIMessage):
+    def step():
+        live_snapshots.extend(len(progress.pages) for progress in research_service.live.values())
+        return message
+    return step
+
+
+def test_researcher_saves_only_read_pages_and_publishes_them_live(tmp_path, monkeypatch):
     class FakeLiteLLMGateway:
         async def create_trace_key(self, **_kwargs):
             return "test-session-trace-key"
@@ -152,98 +97,74 @@ def test_fake_browser_and_deep_agent_research_a_topic(tmp_path, monkeypatch):
         async def spend_logs(self, _api_key):
             return []
 
-    monkeypatch.setattr("app.harness.runtime.LiteLLMGateway", FakeLiteLLMGateway)
     fake_browser = tmp_path / "fake_agent_browser.py"
-    fake_model = tmp_path / "fake_model.py"
     _write_fake_browser(fake_browser)
-    _write_fake_model(fake_model)
-
-    class FakeDeepAgentRuntime:
-        async def execute(self, prompt, **_kwargs):
-            process = await asyncio.create_subprocess_exec(
-                sys.executable,
-                str(fake_model),
-                stdin=asyncio.subprocess.PIPE,
-                stdout=asyncio.subprocess.PIPE,
-            )
-            stdout, _ = await process.communicate(prompt.encode())
-            assert process.returncode == 0
-            envelope = json.loads(stdout)
-            return DeepAgentExecution(json.loads(envelope["response"]))
-
     gateway = BrowserGateway(
         client=AgentBrowserClient(command=[sys.executable, str(fake_browser)]),
         resolver=_public_resolver,
     )
-    browser_result = asyncio.run(gateway.browser_read(["https://docs.example.com/source-0"]))
-    assert browser_result["pages"][0]["status"] == "ok"
 
-    monkeypatch.setattr("app.harness.runtime.DeepAgentRuntime", FakeDeepAgentRuntime)
+    async def browser_search(query: str) -> dict:
+        """Search public web pages."""
+        return {"status": "ok", "query": query, "results": [{"title": "Defining functions", "url": READ_URL}]}
+
+    async def browser_read(urls: list[str]) -> dict:
+        """Read up to four public HTTPS pages."""
+        return await gateway.browser_read(urls)
+
+    @asynccontextmanager
+    async def fake_browser_tools():
+        yield [StructuredTool.from_function(coroutine=browser_search), StructuredTool.from_function(coroutine=browser_read)]
+
+    script[:] = [
+        _call("read_file", {"file_path": "/skills/plan/SKILL.md", "limit": 1000}),
+        _call("set_coverage", {"items": [{"id": "basics", "question": "How is a Python function defined?"}]}),
+        _call("browser_search", {"query": "Python functions def statement official tutorial"}),
+        _call("browser_read", {"urls": [READ_URL]}),
+        _call("save_page", _page("https://docs.example.com/never-read")),
+        _call("save_page", _page(READ_URL)),
+        _snapshot_then(_call("set_coverage", {"items": [{"id": "basics", "question": "How is a Python function defined?", "status": "covered"}]})),
+        AIMessage(content="Saved one page covering how functions are defined."),
+    ]
+    offered.clear(), replies.clear(), live_snapshots.clear()
+    monkeypatch.setattr("app.harness.runtime.LiteLLMGateway", FakeLiteLLMGateway)
     monkeypatch.setattr(
-        learning_service,
-        "browser_gateway_factory",
-        lambda: BrowserGateway(
-            client=AgentBrowserClient(command=[sys.executable, str(fake_browser)]),
-            resolver=_public_resolver,
-        ),
+        "app.harness.deep_agents.DeepAgentRuntime._model",
+        lambda self, api_key, metadata: ScriptedModel(model="litellm_proxy/agent-model", api_base="http://litellm", api_key=api_key),
     )
+    monkeypatch.setattr(research_service, "browser_tools", fake_browser_tools)
+
     with TestClient(app) as client:
-        admin = _headers(client, "admin@example.com", "AdminPass123!")
-        try:
-            email = f"fake-cli-{uuid4().hex}@example.com"
-            registration = client.post(
-                "/auth/register", json={"email": email, "password": "LearnerPass123!"}
-            )
-            learner = {"Authorization": f"Bearer {registration.json()['access_token']}"}
-            response = client.post(
-                "/learning-runs",
-                headers=learner,
-                json={"topic": "Python functions", "weeks": 1, "hours_per_week": 3},
-            )
-            assert response.status_code == 202, response.text
-            started = response.json()
-            assert started["status"] == "running"
-            # TestClient runs background tasks before returning the response.
-            status = client.get(f"/learning-runs/{started['id']}/status", headers=learner).json()
-            assert status == {"id": started["id"], "status": "completed", "error": None}
-            run = client.get(f"/learning-runs/{started['id']}", headers=learner).json()
-            assert set(run) == {"id", "harness", "research", "sessions"}
-            assert len(run["research"]["sources"]) == 5
-            assert len(run["research"]["visited_sources"]) == 5
-            assert run["research"]["stop_reason"] == "coverage_satisfied"
-            assert all(item["status"] == "covered" for item in run["research"]["coverage"])
-            verified_urls = {source["url"] for source in run["research"]["sources"]}
-            assert set(run["sessions"]) == {"Researcher"}
+        registration = client.post("/auth/register", json={"email": f"r-{uuid4().hex}@example.com", "password": "LearnerPass123!"})
+        learner = {"Authorization": f"Bearer {registration.json()['access_token']}"}
+        started = client.post("/research-runs", headers=learner, json={"topic": "Python functions", "weeks": 1, "hours_per_week": 3})
+        assert started.status_code == 202, started.text
+        # TestClient runs background tasks before returning the response.
+        run = client.get(f"/research-runs/{started.json()['id']}", headers=learner).json()
+        trace = client.get(f"/research-runs/{run['id']}/trace", headers=learner).json()
+        other = client.post("/auth/register", json={"email": f"o-{uuid4().hex}@example.com", "password": "LearnerPass123!"})
+        other_headers = {"Authorization": f"Bearer {other.json()['access_token']}"}
+        assert client.get(f"/research-runs/{run['id']}", headers=other_headers).status_code == 404
 
-            trace = client.get(f"/learning-runs/{run['id']}/trace", headers=learner)
-            assert trace.status_code == 200, trace.text
-            trace_body = trace.json()
-            session_names = {session["agent_name"] for session in trace_body["sessions"]}
-            assert {
-                "BrowserResearch", "ResearchQueryPlanner", "ResearchSelector",
-                "ResearchSynthesisPart1", "ResearchCoverageRound1",
-            } <= session_names
-            assert all(session["transcript"] for session in trace_body["sessions"])
-            researcher_trace = next(
-                session for session in trace_body["sessions"]
-                if session["agent_name"] == "BrowserResearch"
-            )
-            assert len(researcher_trace["tool_invocations"]) == 3
-            assert {
-                page["url"]
-                for tool in researcher_trace["tool_invocations"]
-                for page in tool["metadata"].get("page_results", [])
-            } == verified_urls
+    assert not script, "the agent stopped before finishing the script"
+    assert offered[0] == ["browser_read", "browser_search", "compact_conversation", "read_file", "save_page", "set_coverage"]
+    assert "name: plan" in replies[1]
+    assert "not read in this run" in replies[5]
+    assert live_snapshots == [1]
+    assert run["status"] == "completed" and run["error"] is None
+    assert run["coverage"] == [{"id": "basics", "question": "How is a Python function defined?", "status": "covered"}]
+    assert [page["url"] for page in run["pages"]] == [READ_URL]
+    session = next(item for item in trace["sessions"] if item["agent_name"] == "Researcher")
+    assert {tool["tool_name"] for tool in session["tool_invocations"]} >= {"browser_search", "browser_read", "save_page"}
 
-            other_email = f"other-{uuid4().hex}@example.com"
-            other_registration = client.post(
-                "/auth/register",
-                json={"email": other_email, "password": "LearnerPass123!"},
-            )
-            other = {
-                "Authorization": f"Bearer {other_registration.json()['access_token']}"
-            }
-            assert client.get(f"/learning-runs/{run['id']}/trace", headers=other).status_code == 404
-            assert client.get(f"/learning-runs/{run['id']}", headers=other).status_code == 404
-        finally:
-            assert admin
+
+def test_browser_mcp_server_exposes_only_search_and_read(tmp_path, monkeypatch):
+    fake_browser = tmp_path / "fake_agent_browser.py"
+    _write_fake_browser(fake_browser)
+    monkeypatch.setenv("AGENT_BROWSER_COMMAND", f"{sys.executable} {fake_browser}")
+
+    async def tool_names():
+        async with browser_tools() as tools:
+            return sorted(tool.name for tool in tools)
+
+    assert asyncio.run(tool_names()) == ["browser_read", "browser_search"]

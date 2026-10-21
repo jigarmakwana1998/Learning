@@ -26,6 +26,7 @@ class AgentHarness:
         prompt: str,
         *,
         persisted_prompt: str | None = None,
+        **agent_options,
     ) -> tuple[AgentSessionRecord, "AgentResult"]:
         session = AgentSessionRecord(
             agent_run_id=run_id,
@@ -51,6 +52,7 @@ class AgentHarness:
             session.id,
             prompt,
             persisted_prompt=persisted_prompt,
+            **agent_options,
         )
 
     async def resume_and_run(
@@ -59,6 +61,7 @@ class AgentHarness:
         prompt: str,
         *,
         persisted_prompt: str | None = None,
+        **agent_options,
     ) -> "AgentResult":
         session = await self.get(session_id)
         if session.status == "closed":
@@ -121,6 +124,7 @@ class AgentHarness:
                 agent_name=session.agent_name,
                 on_event=capture_harness_event,
                 gateway_api_key=gateway_api_key,
+                **agent_options,
             )
             for tool_event in execution.tool_events:
                 await record_tool_invocation(
