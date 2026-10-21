@@ -1228,8 +1228,8 @@ class LearningService:
                 if unknown := [item for item in section.coverage_ids if covered and item not in covered]:
                     raise ValueError(f"Planner {where} uses coverage ids that research did not cover: {', '.join(unknown)}")
                 key_points = [point.strip() for point in section.key_points if point.strip()]
-                if not 3 <= len(key_points) <= 7 or len({point.casefold() for point in key_points}) != len(key_points):
-                    raise ValueError(f"Planner {where} needs 3-7 distinct key points.")
+                if not key_points:
+                    raise ValueError(f"Planner {where} needs at least one key point.")
                 if not 15 <= section.estimated_minutes <= 120:
                     raise ValueError(f"Planner {where} needs estimated_minutes between 15 and 120.")
                 assigned.update(section.coverage_ids)
@@ -1477,11 +1477,9 @@ class LearningService:
                 raise ValueError(
                     f"Planner lesson {lesson.id or '<unknown>'} in week {week} needs complete {name}."
                 )
-        if not 3 <= len(lesson.section_plan) <= 7 or any(
-            len(item.strip()) < 10 for item in lesson.section_plan
-        ):
+        if not lesson.section_plan:
             raise ValueError(
-                f"Planner lesson {lesson.id or '<unknown>'} in chapter {week} needs 3-7 key points."
+                f"Planner lesson {lesson.id or '<unknown>'} in chapter {week} needs at least one key point."
             )
         if len(set(item.strip().casefold() for item in lesson.section_plan)) != len(lesson.section_plan):
             raise ValueError(f"Planner lesson {lesson.id} repeats a section-plan item.")

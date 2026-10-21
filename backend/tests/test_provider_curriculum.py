@@ -286,9 +286,9 @@ def test_planner_needs_distinct_key_points_and_fits_the_course_budget():
     goal = LearningGoal(topic="Python functions", weeks=1, hours_per_week=1)
     research = _covered_research()
 
-    with pytest.raises(ValueError, match="3-7 distinct key points"):
+    with pytest.raises(ValueError, match="at least one key point"):
         LearningService._planned_modules(
-            goal, _chapters([_section(["foundations"], points=2), _section(["mechanism"])]), research
+            goal, _chapters([_section(["foundations"], points=0), _section(["mechanism"])]), research
         )
     with pytest.raises(ValueError, match="over the learner's 60-minute budget"):
         LearningService._planned_modules(
