@@ -260,55 +260,51 @@ async def test_budget_exhaustion_returns_grounded_partial_research(monkeypatch):
     assert research.warnings
 
 
-def test_malformed_plan_falls_back_to_curriculum_scale_discovery_queries():
-    requirements, queries, seeds = LearningService._validated_query_plan(
-        {"coverage_requirements": "broken", "queries": [], "seed_candidates": []},
-        LearningGoal(topic="Python functions", weeks=1),
-        allow_fallback=True,
-    )
-
-    assert len(requirements) == 5
-    assert len(queries) == 5
-    assert all("Python functions" in item["query"] for item in queries)
-    assert {item["id"] for item in requirements} == {
-        item["coverage_ids"][0] for item in queries
-    }
-    assert seeds == []
+def test_malformed_plan_fails_with_the_schema_error_instead_of_template_queries():
+    with pytest.raises(ValueError, match="coverage_requirements"):
+        LearningService._validated_query_plan(
+            {"coverage_requirements": "broken", "queries": [], "seed_candidates": []},
+            LearningGoal(topic="Python functions", weeks=1),
+        )
 
 
-def test_query_plan_scopes_searches_and_adds_a_discovery_path_for_every_requirement():
-    requirement_ids = ["foundations", "mechanism", "examples", "limits", "integration"]
+def test_query_plan_scopes_searches_and_keeps_only_queries_tied_to_requirements():
+    requirement_ids = ["foundations", "mechanism"]
     requirements, queries, _ = LearningService._validated_query_plan(
         {
             "coverage_requirements": [
                 {
                     "id": requirement_id,
                     "question": f"What evidence teaches {requirement_id} clearly?",
-                    "priority": "core" if index < 3 else "supporting",
+                    "priority": "core",
                     "depth": "detailed",
                     "evidence_policy": "single_source_ok",
                 }
-                for index, requirement_id in enumerate(requirement_ids)
+                for requirement_id in requirement_ids
             ],
             "queries": [
                 {
                     "query": "authoritative mechanism explanation",
                     "purpose": "Find mechanism evidence",
                     "coverage_ids": ["mechanism"],
-                }
+                },
+                {
+                    "query": "Python functions undeclared requirement",
+                    "purpose": "Points at a requirement that was never declared",
+                    "coverage_ids": ["invented"],
+                },
             ],
             "seed_candidates": [],
         },
         LearningGoal(topic="Python functions", weeks=1),
     )
 
-    assert len(requirements) == 5
-    assert all("Python functions" in item["query"] for item in queries)
-    assert {
-        requirement_id
-        for item in queries
-        for requirement_id in item["coverage_ids"]
-    } == set(requirement_ids)
+    assert [item["id"] for item in requirements] == requirement_ids
+    assert queries == [{
+        "query": "Python functions authoritative mechanism explanation",
+        "purpose": "Find mechanism evidence",
+        "coverage_ids": ["mechanism"],
+    }]
 
 
 def test_corroboration_requires_verified_evidence_from_distinct_hosts():
@@ -335,13 +331,16 @@ def test_corroboration_requires_verified_evidence_from_distinct_hosts():
 
 
 @pytest.mark.asyncio
-async def test_zero_readable_core_evidence_uses_semantic_failure(monkeypatch):
+async def test_research_with_no_readable_page_stops_before_planning(monkeypatch):
     gateway = GapGateway(readable=False)
     monkeypatch.setattr("app.services.learning_service.AgentHarness", AdaptiveHarness)
     service = LearningService()
     service.browser_gateway_factory = lambda: gateway
 
-    with pytest.raises(ValueError, match="No verified evidence supports the requested topic"):
-        await service._browser_research(
-            FakeDb(), "run-empty", "deep-agents", LearningGoal(topic="Adaptive systems", weeks=2)
-        )
+    _, research = await service._browser_research(
+        FakeDb(), "run-empty", "deep-agents", LearningGoal(topic="Adaptive systems", weeks=2)
+    )
+
+    assert research.sources == []
+    with pytest.raises(ValueError, match="did not cover any part of the requested topic"):
+        LearningService._require_covered_research(research)

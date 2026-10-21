@@ -2,7 +2,6 @@ from types import SimpleNamespace
 
 import pytest
 
-from app.harness import AgentResult
 from app.schemas.learning import LearningRunRequest
 from app.services.learning_service import LearningService
 
@@ -23,13 +22,9 @@ def source(index: int, url: str | None = None) -> dict:
     }
 
 
-def research_output(sources: list[dict], visited_urls=None) -> AgentResult:
-    return AgentResult(
-        {"topic": "Transformers", "sources": sources},
-        visited_urls=frozenset(
-            visited_urls if visited_urls is not None else [item["url"] for item in sources]
-        ),
-    )
+def verified(sources: list[dict], visited_urls=None):
+    visited = visited_urls if visited_urls is not None else [item["url"] for item in sources]
+    return LearningService._verified_sources(sources, set(visited))
 
 
 def test_accepts_one_read_source_and_normalizes_final_url():
@@ -37,10 +32,10 @@ def test_accepts_one_read_source_and_normalizes_final_url():
     sources[0]["url"] = "HTTPS://DOCS.EXAMPLE.COM/source-0#overview"
     visited = ["https://docs.example.com/source-0"]
 
-    research = LearningService._verified_research(research_output(sources, visited))
+    verified_sources = verified(sources, visited)
 
-    assert len(research.sources) == 1
-    assert research.sources[0].url == "https://docs.example.com/source-0"
+    assert len(verified_sources) == 1
+    assert verified_sources[0].url == "https://docs.example.com/source-0"
 
 
 def test_discards_unread_duplicate_and_search_urls_but_keeps_verified_sources():
@@ -55,17 +50,17 @@ def test_discards_unread_duplicate_and_search_urls_but_keeps_verified_sources():
         rejected[2]["url"],
     ]
 
-    research = LearningService._verified_research(research_output([*accepted, *rejected], visited))
+    verified_sources = verified([*accepted, *rejected], visited)
 
-    assert [item.title for item in research.sources] == ["Source 0"]
+    assert [item.title for item in verified_sources] == ["Source 0"]
 
 
 def test_keeps_all_verified_sources_within_the_browser_safety_budget():
     sources = [source(index) for index in range(15)]
 
-    research = LearningService._verified_research(research_output(sources))
+    verified_sources = verified(sources)
 
-    assert len(research.sources) == 15
+    assert len(verified_sources) == 15
 
 
 def test_accepts_a_single_authoritative_source_kind():
@@ -73,13 +68,22 @@ def test_accepts_a_single_authoritative_source_kind():
     for item in sources:
         item["kind"] = "documentation"
 
-    research = LearningService._verified_research(research_output(sources))
-    assert len(research.sources) == 3
+    verified_sources = verified(sources)
+    assert len(verified_sources) == 3
 
 
 def test_returns_no_sources_when_no_citation_was_browser_verified():
-    research = LearningService._verified_research(research_output([source(0)], []))
-    assert research.sources == []
+    verified_sources = verified([source(0)], [])
+    assert verified_sources == []
+
+
+def test_drops_a_malformed_source_instead_of_failing_research():
+    sources = [source(0), source(1)]
+    sources[1]["rationale"] = "Too"  # under the 8-character minimum
+
+    verified_sources = verified(sources)
+
+    assert [item.title for item in verified_sources] == ["Source 0"]
 
 
 @pytest.mark.asyncio
@@ -148,5 +152,5 @@ def test_rejects_malformed_or_non_https_citations(url):
     sources = [source(0), source(8, url)]
     visited = [item["url"] for item in sources]
 
-    research = LearningService._verified_research(research_output(sources, visited))
-    assert [item.url for item in research.sources] == [source(0)["url"]]
+    verified_sources = verified(sources, visited)
+    assert [item.url for item in verified_sources] == [source(0)["url"]]

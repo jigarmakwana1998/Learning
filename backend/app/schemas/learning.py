@@ -18,16 +18,16 @@ class LearningRunRequest(LearningGoal):
 
 
 class Source(BaseModel):
-    title: str = Field(min_length=2, max_length=500)
+    title: str = Field(min_length=2)
     url: str
     kind: Literal["documentation", "paper", "book", "lecture", "slides", "article", "repository"]
-    rationale: str = Field(min_length=8, max_length=2000)
-    key_points: list[str] = Field(default_factory=list, max_length=8)
+    rationale: str = Field(min_length=8)
+    key_points: list[str] = Field(default_factory=list)
 
 
 class SourceVisit(BaseModel):
     url: str
-    title: str | None = Field(default=None, max_length=500)
+    title: str | None = None
     status: Literal["discovered", "read", "unavailable"]
     selected: bool = False
 
@@ -66,7 +66,7 @@ class CurriculumModule(BaseModel):
     week: int
     title: str
     outcomes: list[str]
-    coverage_ids: list[str] = Field(default_factory=list, max_length=12)
+    coverage_ids: list[str] = Field(default_factory=list)
     source_urls: list[str]
     overview: str = ""
     estimated_hours: int = Field(default=1, ge=1)
@@ -74,23 +74,23 @@ class CurriculumModule(BaseModel):
 
 
 class LessonParagraph(BaseModel):
-    heading: str = Field(default="", max_length=200)
-    text: str = Field(min_length=80, max_length=3000)
-    coverage_ids: list[str] = Field(default_factory=list, max_length=3)
-    source_urls: list[str] = Field(min_length=1, max_length=3)
+    heading: str = Field(min_length=3)
+    text: str = Field(min_length=80)
+    coverage_ids: list[str] = Field(default_factory=list)
+    source_urls: list[str] = Field(min_length=1)
 
 
 class Lesson(BaseModel):
     id: str
     title: str
     objective: str
-    coverage_ids: list[str] = Field(default_factory=list, max_length=3)
-    section_plan: list[str] = Field(default_factory=list, max_length=7)
+    coverage_ids: list[str] = Field(default_factory=list)
+    section_plan: list[str] = Field(default_factory=list)
     content: str = ""
     paragraphs: list[LessonParagraph] = Field(default_factory=list)
     # Practice comes from the assessment step; generated courses leave it empty for now.
     practice: str = ""
-    estimated_minutes: int = Field(ge=5, le=240)
+    estimated_minutes: int = Field(ge=1)
     # Provider output is validated and populated from paragraph citations when omitted.
     source_urls: list[str] = Field(default_factory=list)
 
