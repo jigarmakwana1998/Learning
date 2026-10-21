@@ -22,7 +22,7 @@ TABLES = [
 
 def upgrade():
     for table in TABLES:
-        op.execute(f"DROP TABLE IF EXISTS {table} CASCADE")  # names are the fixed list above
+        op.drop_table(table, if_exists=True)
 
 
 def _migration(filename: str):
