@@ -200,7 +200,7 @@ async def test_browser_research_is_bounded_grounded_and_body_free_in_audit(monke
         LearningGoal(topic="Transformers", weeks=2),
     )
 
-    assert session.agent_name == "ResearchSynthesisPart1"
+    assert session.agent_name == "BrowserResearch"
     assert calls == [
         "ResearchQueryPlanner", "ResearchSelector",
         "ResearchSynthesisPart1", "ResearchCoverageRound1",

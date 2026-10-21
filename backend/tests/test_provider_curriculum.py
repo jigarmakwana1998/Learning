@@ -152,7 +152,7 @@ def test_provider_course_preserves_authored_content_and_derives_chapter_sources(
     ]
 
 
-def test_provider_course_rejects_unverified_lesson_citations_and_empty_chapters():
+def test_provider_course_rejects_unverified_citations_and_missing_paragraphs():
     goal = LearningGoal(topic="Python functions", weeks=1, hours_per_week=3)
     research = _research()
 
@@ -168,8 +168,10 @@ def test_provider_course_rejects_unverified_lesson_citations_and_empty_chapters(
             research,
         )
 
-    with pytest.raises(ValueError, match="at least one section"):
-        LearningService._provider_curriculum(goal, _planner_output(lessons=[]), research)
+    short = _lesson("two")
+    short["paragraphs"] = short["paragraphs"][:5]  # six key points, five paragraphs
+    with pytest.raises(ValueError, match="one paragraph per key point"):
+        LearningService._provider_curriculum(goal, _planner_output(lessons=[_lesson("one"), short]), research)
 
 
 def test_provider_curriculum_proves_every_research_requirement_reaches_cited_lessons():
@@ -221,13 +223,15 @@ def test_provider_curriculum_rejects_unmapped_or_unsupported_coverage_claims():
         LearningService._provider_curriculum(goal, unsupported, research)
 
 
-def test_course_generation_gate_rejects_partial_research():
+def test_partial_research_still_builds_a_course_but_none_covered_stops():
     research = _covered_research()
     research.coverage[1].status = "partial"
     research.stop_reason = "budget_exhausted"
+    LearningService._require_covered_research(research)  # one covered requirement is enough
 
-    with pytest.raises(ValueError, match="course generation stopped before writing lessons"):
-        LearningService._require_complete_research(research)
+    research.coverage[0].status = "missing"
+    with pytest.raises(ValueError, match="did not cover any part of the requested topic"):
+        LearningService._require_covered_research(research)
 
 
 def _section(coverage_ids: list[str], *, minutes: int = 45, points: int = 6) -> dict:
@@ -282,14 +286,28 @@ def test_planner_rejects_unknown_or_unassigned_coverage():
         LearningService._planned_modules(goal, _chapters([_section(["foundations"])]), research)
 
 
-def test_planner_needs_distinct_key_points_and_fits_the_course_budget():
+@pytest.mark.parametrize(
+    ("field", "change"),
+    [
+        ("key_points", lambda plan: plan["chapters"][0]["sections"][0].update(key_points=[])),
+        ("sections", lambda plan: plan["chapters"][0].update(sections=[])),
+        ("title", lambda plan: plan["chapters"][0].update(title="  ")),
+    ],
+)
+def test_planner_schema_minimums_name_the_failing_field(field, change):
+    plan = _chapters([_section(["foundations"]), _section(["mechanism"])])
+    change(plan)
+
+    with pytest.raises(ValueError, match=f"invalid chapter structure(.|\n)*{field}"):
+        LearningService._planned_modules(
+            LearningGoal(topic="Python functions", weeks=1, hours_per_week=3), plan, _covered_research()
+        )
+
+
+def test_planner_must_fit_the_course_budget():
     goal = LearningGoal(topic="Python functions", weeks=1, hours_per_week=1)
     research = _covered_research()
 
-    with pytest.raises(ValueError, match="at least one key point"):
-        LearningService._planned_modules(
-            goal, _chapters([_section(["foundations"], points=0), _section(["mechanism"])]), research
-        )
     with pytest.raises(ValueError, match="over the learner's 60-minute budget"):
         LearningService._planned_modules(
             goal, _chapters([_section(["foundations"]), _section(["mechanism"])]), research

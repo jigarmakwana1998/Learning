@@ -3,11 +3,11 @@ import json
 import logging
 import math
 import re
-from collections import Counter
 from datetime import datetime, timezone
 from time import perf_counter
 from urllib.parse import SplitResult, urlsplit, urlunsplit
 
+from pydantic import ValidationError
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -15,7 +15,7 @@ from app.agents import (
     LessonWriterAgent, PlannerAgent, ResearchCoverageEvaluatorAgent,
     ResearchQueryPlannerAgent, ResearchSelectorAgent, ResearchSynthesisAgent,
 )
-from app.agents.contracts import PlannerOutput
+from app.agents.contracts import PlannerOutput, ResearchPlanOutput
 from app.browser.gateway import BrowserGateway
 from app.core.config import get_settings
 from app.core.database import SessionLocal
@@ -72,7 +72,7 @@ class LearningService:
             research_session, research = await self._browser_research(
                 db, run.id, harness_name, goal
             )
-            self._require_complete_research(research)
+            self._require_covered_research(research)
             planner_session, planner_output = await harness.start_and_run(
                 run.id, planner.name, planner.build_prompt(goal, research.model_dump())
             )
@@ -111,74 +111,18 @@ class LearningService:
         research: ResearchBrief,
         planner_output: dict,
     ) -> tuple[dict, dict[str, str]]:
-        """Expand compact lesson blueprints with requirement-targeted evidence."""
+        """Have the lesson writer expand every planned section into cited paragraphs."""
         expanded_output = json.loads(json.dumps(planner_output))
-        curriculum = expanded_output.get("curriculum")
-        if not isinstance(curriculum, list):
-            return expanded_output, {}
-        for module in curriculum:
-            if not isinstance(module, dict):
-                continue
-            if isinstance(module.get("outcomes"), str):
-                outcome_text = module["outcomes"].strip()
-                outcome_parts = [
-                    part.strip(" .")
-                    for part in re.split(r"\s*(?:,|;|\band\b)\s*", outcome_text)
-                    if len(part.strip(" .")) >= 8
-                ]
-                module["outcomes"] = outcome_parts if len(outcome_parts) >= 2 else [outcome_text]
-            for lesson in module.get("lessons", []):
-                if isinstance(lesson, dict) and lesson.get("id") is not None:
-                    lesson["id"] = str(lesson["id"])
         writer = LessonWriterAgent()
         sessions: dict[str, str] = {}
         coverage_by_id = {item.requirement_id: item for item in research.coverage}
-        for module in curriculum:
-            if not isinstance(module, dict) or not isinstance(module.get("lessons"), list):
-                continue
+        for module in expanded_output["curriculum"]:
             for lesson in module["lessons"]:
-                if not isinstance(lesson, dict):
-                    continue
-                paragraphs = lesson.get("paragraphs")
-                word_count = sum(
-                    len(str(paragraph.get("text") or "").split())
-                    for paragraph in paragraphs or []
-                    if isinstance(paragraph, dict)
-                )
-                has_complete_metadata = all(
-                    isinstance(paragraph, dict)
-                    and str(paragraph.get("heading") or "").strip()
-                    and isinstance(paragraph.get("coverage_ids"), list)
-                    and paragraph["coverage_ids"]
-                    for paragraph in paragraphs or []
-                )
-                if word_count >= 1200 and has_complete_metadata:
-                    continue
-                lesson_id = str(lesson.get("id") or "")
-                coverage_ids = [
-                    str(value) for value in lesson.get("coverage_ids", [])
-                    if str(value) in coverage_by_id
-                ]
-                declared_coverage_ids = [
-                    str(value) for value in lesson.get("coverage_ids", [])
-                ]
-                if coverage_by_id and (
-                    not coverage_ids
-                    or len(set(declared_coverage_ids)) != len(coverage_ids)
-                    or any(coverage_by_id[item].status != "covered" for item in coverage_ids)
-                ):
-                    raise ValueError(
-                        f"Planner must assign covered research requirements to lesson {lesson_id}."
-                    )
                 coverage_targets = [
                     coverage_by_id[requirement_id].model_dump(mode="json")
-                    for requirement_id in coverage_ids
+                    for requirement_id in lesson["coverage_ids"]
                 ]
-                target_urls = {
-                    url
-                    for target in coverage_targets
-                    for url in target.get("supported_by", [])
-                }
+                target_urls = {url for target in coverage_targets for url in target["supported_by"]}
                 verified_sources = [
                     source.model_dump(mode="json")
                     for source in research.sources
@@ -191,9 +135,9 @@ class LearningService:
                         goal,
                         {
                             "module": {
-                                "week": module.get("week"),
-                                "title": module.get("title"),
-                                "outcomes": module.get("outcomes"),
+                                "week": module["week"],
+                                "title": module["title"],
+                                "outcomes": module["outcomes"],
                             },
                             "lesson_draft": lesson,
                             "coverage_targets": coverage_targets,
@@ -202,12 +146,10 @@ class LearningService:
                     ),
                 )
                 expanded = output.get("lesson") if isinstance(output, dict) else None
-                if not isinstance(expanded, dict) or str(expanded.get("id")) != lesson_id:
-                    raise ValueError(f"LessonWriter must return the requested lesson id {lesson_id}.")
-                if not isinstance(expanded.get("paragraphs"), list):
-                    raise ValueError(f"LessonWriter must return paragraphs for lesson {lesson_id}.")
-                lesson["paragraphs"] = expanded["paragraphs"]
-                sessions[f"LessonWriter:{lesson_id}"] = session.id
+                if not isinstance(expanded, dict) or str(expanded.get("id")) != lesson["id"]:
+                    raise ValueError(f"LessonWriter must return the requested lesson id {lesson['id']}.")
+                lesson["paragraphs"] = expanded.get("paragraphs") or []
+                sessions[f"LessonWriter:{lesson['id']}"] = session.id
         return expanded_output, sessions
 
     async def _browser_research(
@@ -247,34 +189,13 @@ class LearningService:
                 query_planner.name,
                 query_planner.build_prompt(goal),
             )
-            try:
-                requirements, queries, seed_candidates = self._validated_query_plan(
-                    query_output, goal
-                )
-            except ValueError as plan_error:
-                try:
-                    _, repaired_output = await self._plain_research_call(
-                        db,
-                        run_id,
-                        harness,
-                        query_planner.name,
-                        query_planner.build_prompt(
-                            goal,
-                            {"repair": str(plan_error), "previous_output": query_output},
-                        ),
-                    )
-                    requirements, queries, seed_candidates = self._validated_query_plan(
-                        repaired_output, goal, allow_fallback=True
-                    )
-                except Exception:
-                    requirements, queries, seed_candidates = self._fallback_query_plan(goal)
+            requirements, queries, seed_candidates = self._validated_query_plan(query_output, goal)
 
             candidates: list[dict[str, object]] = list(seed_candidates)
             seen_candidates = {item["url"] for item in candidates}
             consumed_candidates: set[str] = set()
             query_queue = list(queries)
             seen_queries: set[str] = set()
-            kind_hints: dict[str, str] = {}
             synthesized_by_url: dict[str, dict] = {}
             evidence_by_requirement: dict[str, dict[str, str]] = {
                 item["id"]: {} for item in requirements
@@ -345,14 +266,11 @@ class LearningService:
                         ):
                             continue
                         seen_candidates.add(normalized)
-                        candidate: dict[str, object] = {
-                            "title": str(item.get("title") or "Public source")[:300],
+                        candidates.append({
+                            "title": str(item.get("title") or ""),
                             "url": normalized,
                             "coverage_ids": query_item["coverage_ids"],
-                        }
-                        if kind_hint := self._source_kind_hint(str(candidate["title"]), normalized):
-                            candidate["kind_hint"] = kind_hint
-                        candidates.append(candidate)
+                        })
                     continue
 
                 max_selections = min(
@@ -378,15 +296,13 @@ class LearningService:
                     )
                 except Exception:
                     selector_output = {}
-                selections = self._validated_research_selections(
+                selected_urls = self._validated_research_selections(
                     selector_output, available[:40], max_selections
                 )
-                if not selections:
+                if not selected_urls:
                     stop_reason = "no_new_evidence"
                     break
-                selected_urls = [item["url"] for item in selections]
                 consumed_candidates.update(selected_urls)
-                kind_hints.update({item["url"]: item["kind"] for item in selections})
                 call_started = perf_counter()
                 result = await gateway.browser_read(selected_urls)
                 pages_attempted += len(selected_urls)
@@ -406,18 +322,17 @@ class LearningService:
                             visit_ledger.append(SourceVisit(url=requested, status="unavailable"))
                         continue
                     normalized = self._normalize_evidence_url(page.get("url"))
-                    content = str(page.get("content") or "")[:6000]
+                    content = str(page.get("content") or "")
                     if normalized is None or normalized in seen_pages or not content.strip():
                         continue
                     seen_pages.add(normalized)
                     pages_read += 1
-                    title = str(page.get("title") or "Public source")[:500]
+                    title = str(page.get("title") or "")
                     visit_ledger.append(SourceVisit(url=normalized, title=title, status="read"))
                     page_batch.append(
                         {
                             "url": normalized,
                             "title": title,
-                            "kind_hint": kind_hints.get(requested or normalized),
                             "content": content,
                             "content_is_untrusted": True,
                         }
@@ -472,30 +387,17 @@ class LearningService:
                     stop_reason = "coverage_satisfied"
                     break
 
-            synthesis_output = {"topic": goal.topic, "sources": list(synthesized_by_url.values())}
-            for source in synthesis_output["sources"]:
-                normalized = self._normalize_evidence_url(source.get("url"))
-                if normalized in kind_hints:
-                    source["kind"] = kind_hints[normalized]
-            from app.harness import AgentResult
-
-            research = self._verified_research(
-                AgentResult(synthesis_output, visited_urls=frozenset(seen_pages))
-            )
-            core_supported = any(
-                item["priority"] == "core" and item["status"] in {"covered", "partial"}
-                for item in coverage
-            )
-            if not research.sources or not core_supported:
-                raise ValueError("No verified evidence supports the requested topic.")
-            selected = {source.url for source in research.sources}
+            sources = self._verified_sources(list(synthesized_by_url.values()), seen_pages)
+            selected = {source.url for source in sources}
+            # Requirements research did not cover are reported, then left out of planning.
             warnings = [
                 f"{item['question']} ({item['status']})"
                 for item in coverage if item["status"] != "covered"
             ]
             research = ResearchBrief.model_validate(
                 {
-                    **research.model_dump(mode="json"),
+                    "topic": goal.topic,
+                    "sources": [source.model_dump(mode="json") for source in sources],
                     "visited_sources": [
                         visit.model_copy(update={"selected": visit.url in selected})
                         for visit in visit_ledger
@@ -508,11 +410,10 @@ class LearningService:
                         "searches": searches,
                         "pages_attempted": pages_attempted,
                         "pages_read": pages_read,
-                        "sources_selected": len(research.sources),
+                        "sources_selected": len(sources),
                     },
                 }
             )
-            synthesis_session = synthesis_sessions[0]
             audit_session.status = "completed"
             audit_session.output_payload = {
                 "candidate_count": len(candidates),
@@ -543,7 +444,7 @@ class LearningService:
                 metadata={"harness": harness, "pipeline": "browser-research"},
                 duration_ms=int((perf_counter() - started) * 1000),
             )
-            return synthesis_session, research
+            return audit_session, research
         except Exception as error:
             audit_session.status = "failed"
             audit_session.error_message = "Browser research pipeline failed."
@@ -596,158 +497,42 @@ class LearningService:
         cls,
         output: dict,
         goal: LearningGoal,
-        *,
-        allow_fallback: bool = False,
     ) -> tuple[list[dict[str, object]], list[dict[str, object]], list[dict[str, object]]]:
-        if not isinstance(output, dict):
-            if allow_fallback:
-                return cls._fallback_query_plan(goal)
-            raise ValueError("ResearchQueryPlanner returned an invalid research plan.")
-
-        raw_requirements = output.get("coverage_requirements")
+        """Keep the planner's requirements, and the queries and seeds tied to them."""
+        plan = ResearchPlanOutput.model_validate(output)
         requirements: list[dict[str, object]] = []
-        seen_ids: set[str] = set()
-        if isinstance(raw_requirements, list):
-            for index, item in enumerate(raw_requirements, start=1):
-                if not isinstance(item, dict):
-                    continue
-                requirement_id = re.sub(
-                    r"[^a-z0-9_-]+", "-", str(item.get("id") or f"requirement-{index}").casefold()
-                ).strip("-")[:80]
-                question = " ".join(str(item.get("question") or "").split())[:500]
-                if not requirement_id or requirement_id in seen_ids or len(question) < 8:
-                    continue
-                seen_ids.add(requirement_id)
-                requirements.append(
-                    {
-                        "id": requirement_id,
-                        "question": question,
-                        "priority": item.get("priority") if item.get("priority") in {"core", "supporting"} else "core",
-                        "depth": item.get("depth") if item.get("depth") in {"overview", "detailed"} else "detailed",
-                        "evidence_policy": item.get("evidence_policy")
-                        if item.get("evidence_policy") in {"single_source_ok", "corroborate"}
-                        else "single_source_ok",
-                    }
-                )
-        if not requirements:
-            if allow_fallback:
-                return cls._fallback_query_plan(goal)
-            raise ValueError("ResearchQueryPlanner did not define usable coverage requirements.")
-        minimum_requirements = cls._minimum_coverage_requirement_count(goal)
-        if len(requirements) < minimum_requirements or len(requirements) > 10:
-            if allow_fallback:
-                return cls._fallback_query_plan(goal)
-            raise ValueError(
-                "ResearchQueryPlanner must define "
-                f"{minimum_requirements}-10 complementary curriculum coverage requirements."
-            )
-        if not any(item["priority"] == "core" for item in requirements):
-            requirements[0]["priority"] = "core"
-        allowed_ids = {str(item["id"]) for item in requirements}
-
+        requirement_ids: set[str] = set()
+        for item in plan.coverage_requirements:
+            if item.id not in requirement_ids:
+                requirement_ids.add(item.id)
+                requirements.append(item.model_dump())
         queries: list[dict[str, object]] = []
         seen_queries: set[str] = set()
-        raw_queries = output.get("queries")
-        if isinstance(raw_queries, list):
-            for item in raw_queries:
-                if not isinstance(item, dict):
-                    continue
-                query = " ".join(str(item.get("query") or "").split())
-                purpose = " ".join(str(item.get("purpose") or "").split())[:300]
-                coverage_ids = [
-                    str(value) for value in item.get("coverage_ids", [])
-                    if str(value) in allowed_ids
-                ][:2]
-                if len(query) < 3 or not coverage_ids:
-                    continue
-                query = cls._scope_research_query(query, goal)
-                normalized = query.casefold()
-                if normalized in seen_queries:
-                    continue
-                seen_queries.add(normalized)
-                queries.append(
-                    {
-                        "query": query,
-                        "purpose": purpose or "Close a research coverage gap",
-                        "coverage_ids": coverage_ids,
-                    }
-                )
-
-        raw_seeds = output.get("seed_candidates")
+        for item in plan.queries:
+            coverage_ids = [value for value in item.coverage_ids if value in requirement_ids]
+            query = cls._scope_research_query(item.query, goal)
+            if coverage_ids and query.casefold() not in seen_queries:
+                seen_queries.add(query.casefold())
+                queries.append({"query": query, "purpose": item.purpose, "coverage_ids": coverage_ids})
         seeds: list[dict[str, object]] = []
         seen_urls: set[str] = set()
-        for item in raw_seeds if isinstance(raw_seeds, list) else []:
-            if not isinstance(item, dict):
+        for item in plan.seed_candidates:
+            url = cls._normalize_evidence_url(item.url)
+            coverage_ids = [value for value in item.coverage_ids if value in requirement_ids]
+            if url is None or url in seen_urls or cls._is_search_results_url(url) or not coverage_ids:
                 continue
-            normalized = cls._normalize_evidence_url(item.get("url"))
-            title = " ".join(str(item.get("title") or "Public source").split())[:300]
-            purpose = " ".join(str(item.get("purpose") or "Candidate evidence").split())[:500]
-            if (
-                normalized is None
-                or normalized in seen_urls
-                or cls._is_search_results_url(normalized)
-            ):
-                continue
-            seen_urls.add(normalized)
-            declared_kind = item.get("kind")
-            kind_hint = declared_kind if declared_kind in {
-                "documentation", "paper", "book", "lecture", "slides", "article", "repository"
-            } else cls._source_kind_hint(title, normalized)
-            coverage_ids = [
-                str(value) for value in item.get("coverage_ids", [])
-                if str(value) in allowed_ids
-            ]
-            if not coverage_ids:
-                continue
-            seed: dict[str, object] = {
-                "title": title,
-                "url": normalized,
-                "purpose": purpose,
+            seen_urls.add(url)
+            seeds.append({
+                "title": item.title,
+                "url": url,
+                "purpose": item.purpose,
                 "coverage_ids": coverage_ids,
                 "is_canonical_seed": "true",
-            }
-            if kind_hint:
-                seed["kind_hint"] = kind_hint
-            seeds.append(seed)
-        mapped_ids = {
-            str(requirement_id)
-            for query in queries
-            for requirement_id in query["coverage_ids"]
-        }
-        for requirement in requirements:
-            requirement_id = str(requirement["id"])
-            if requirement_id in mapped_ids:
-                continue
-            query = cls._scope_research_query(
-                f"{requirement['question']} authoritative source worked example",
-                goal,
-            )
-            normalized = query.casefold()
-            if normalized in seen_queries:
-                query = cls._scope_research_query(
-                    f"{requirement['question']} primary documentation evidence",
-                    goal,
-                )
-                normalized = query.casefold()
-            seen_queries.add(normalized)
-            queries.append(
-                {
-                    "query": query,
-                    "purpose": f"Find teaching evidence for: {requirement['question']}"[:300],
-                    "coverage_ids": [requirement_id],
-                }
-            )
-            mapped_ids.add(requirement_id)
+                **({"kind_hint": item.kind} if item.kind else {}),
+            })
         if not queries:
-            if allow_fallback:
-                return cls._fallback_query_plan(goal, requirements)
-            raise ValueError("ResearchQueryPlanner did not provide a usable discovery path.")
+            raise ValueError("ResearchQueryPlanner returned no search query tied to its requirements.")
         return requirements, queries, seeds
-
-    @staticmethod
-    def _minimum_coverage_requirement_count(goal: LearningGoal) -> int:
-        """Scale breadth without making the research budget grow without bound."""
-        return min(10, max(5, goal.weeks + 2))
 
     @staticmethod
     def _scope_research_query(query: str, goal: LearningGoal) -> str:
@@ -762,90 +547,7 @@ class LearningService:
         required_matches = min(2, len(topic_tokens))
         if topic_tokens and len(topic_tokens.intersection(query_tokens)) < required_matches:
             compact = f"{goal.topic} {compact}"
-        return compact[:300].rstrip()
-
-    @classmethod
-    def _fallback_query_plan(
-        cls,
-        goal: LearningGoal,
-        requirements: list[dict[str, object]] | None = None,
-    ) -> tuple[list[dict[str, object]], list[dict[str, object]], list[dict[str, object]]]:
-        if requirements is None or len(requirements) < cls._minimum_coverage_requirement_count(goal):
-            templates = [
-                (
-                    "foundations",
-                    f"What prerequisite ideas, definitions, and vocabulary are essential for understanding {goal.topic}?",
-                    "core",
-                ),
-                (
-                    "core-components",
-                    f"What are the central concepts, components, or stages of {goal.topic}?",
-                    "core",
-                ),
-                (
-                    "mechanism",
-                    f"How do the main processes, methods, or causal mechanisms in {goal.topic} work step by step?",
-                    "core",
-                ),
-                (
-                    "worked-application",
-                    f"How is {goal.topic} applied in a concrete worked example or realistic case?",
-                    "core",
-                ),
-                (
-                    "boundaries",
-                    f"What limitations, failure modes, tradeoffs, or common misconceptions constrain {goal.topic}?",
-                    "supporting",
-                ),
-                (
-                    "integration",
-                    f"How does {goal.topic} connect to its wider system, workflow, or field, and what decisions depend on it?",
-                    "core",
-                ),
-                (
-                    "implementation",
-                    f"What implementation or execution practices are needed to use {goal.topic} reliably?",
-                    "supporting",
-                ),
-                (
-                    "evaluation",
-                    f"How should results, quality, or understanding of {goal.topic} be evaluated?",
-                    "supporting",
-                ),
-                (
-                    "variants",
-                    f"Which important variants or alternative approaches to {goal.topic} should a learner compare?",
-                    "supporting",
-                ),
-                (
-                    "synthesis",
-                    f"How can a learner synthesize and independently apply the major ideas in {goal.topic}?",
-                    "supporting",
-                ),
-            ]
-            requirement_count = cls._minimum_coverage_requirement_count(goal)
-            requirements = [
-                {
-                    "id": identifier,
-                    "question": question,
-                    "priority": priority,
-                    "depth": "detailed" if goal.weeks > 1 else "overview",
-                    "evidence_policy": "single_source_ok",
-                }
-                for identifier, question, priority in templates[:requirement_count]
-            ]
-        queries = [
-            {
-                "query": cls._scope_research_query(
-                    f"{item['question']} authoritative documentation explanation example",
-                    goal,
-                ),
-                "purpose": f"Find teaching evidence for: {item['question']}"[:300],
-                "coverage_ids": [str(item["id"])],
-            }
-            for item in requirements
-        ]
-        return requirements, queries, []
+        return compact
 
     @classmethod
     def _validated_research_selections(
@@ -853,36 +555,18 @@ class LearningService:
         output: dict,
         candidates: list[dict[str, object]],
         max_count: int,
-    ) -> list[dict[str, str]]:
+    ) -> list[str]:
+        """Keep selected URLs that were offered, once each, up to the batch size."""
+        offered = {item["url"] for item in candidates}
         selections = output.get("selections") if isinstance(output, dict) else None
-        candidate_by_url = {item["url"]: item for item in candidates}
-        allowed_urls = set(candidate_by_url)
-        allowed_kinds = {"documentation", "paper", "book", "lecture", "slides", "article", "repository"}
-        validated: list[dict[str, str]] = []
-        seen: set[str] = set()
+        urls: list[str] = []
         for item in selections if isinstance(selections, list) else []:
-            if not isinstance(item, dict):
-                continue
-            normalized = cls._normalize_evidence_url(item.get("url") or item.get("requested_url"))
-            kind = candidate_by_url.get(normalized, {}).get("kind_hint") or item.get("kind")
-            if normalized not in allowed_urls or normalized in seen or kind not in allowed_kinds:
-                continue
-            seen.add(normalized)
-            validated.append({"url": normalized, "kind": kind})
-            if len(validated) == max_count:
+            url = cls._normalize_evidence_url(item.get("url") if isinstance(item, dict) else None)
+            if url in offered and url not in urls:
+                urls.append(url)
+            if len(urls) == max_count:
                 break
-        for candidate in candidates:
-            if len(validated) == max_count:
-                break
-            normalized = candidate["url"]
-            if normalized in seen:
-                continue
-            kind = candidate.get("kind_hint") or cls._source_kind_hint(
-                candidate.get("title", ""), normalized
-            ) or "article"
-            seen.add(normalized)
-            validated.append({"url": normalized, "kind": kind})
-        return validated
+        return urls
 
     @classmethod
     def _default_coverage(
@@ -921,16 +605,7 @@ class LearningService:
             normalized = cls._normalize_evidence_url(source.get("url"))
             if normalized is None or normalized not in visited_urls:
                 continue
-            key_points = [
-                " ".join(str(point).split()) for point in source.get("key_points", [])
-                if len(" ".join(str(point).split())) >= 20
-            ][:8]
-            if not key_points:
-                continue
-            normalized_source = dict(source)
-            normalized_source["url"] = normalized
-            normalized_source["key_points"] = key_points
-            sources_by_url[normalized] = normalized_source
+            sources_by_url[normalized] = {**source, "url": normalized}
             coverage_evidence = source.get("coverage_evidence")
             for item in coverage_evidence if isinstance(coverage_evidence, list) else []:
                 if not isinstance(item, dict):
@@ -982,15 +657,6 @@ class LearningService:
                 status = "partial"
             else:
                 status = "missing"
-            try:
-                default_confidence = 0.8 if status == "covered" else 0.4 if status == "partial" else 0
-                confidence = min(
-                    1.0,
-                    max(0.0, float(raw.get("confidence", default_confidence))),
-                )
-            except (TypeError, ValueError):
-                confidence = 0.0
-            rationale = " ".join(str(raw.get("rationale") or "").split())[:1000]
             coverage.append(
                 {
                     "requirement_id": requirement_id,
@@ -999,21 +665,13 @@ class LearningService:
                     "depth": requirement["depth"],
                     "evidence_policy": evidence_policy,
                     "status": status,
-                    "confidence": confidence,
+                    "confidence": raw.get("confidence", 0.0),
                     "supported_by": supported_by,
-                    "rationale": rationale or (
-                        "Verified evidence covers this requirement."
-                        if status == "covered"
-                        else "More evidence is needed."
-                    ),
+                    "rationale": raw.get("rationale") or "",
                 }
             )
-            next_query = " ".join(str(raw.get("next_query") or "").split())[:300]
-            if not raw and status != "covered" and len(next_query) < 3:
-                next_query = (
-                    f"{requirement['question']} authoritative evidence worked example"
-                )[:300]
-            if status != "covered" and len(next_query) >= 3:
+            next_query = str(raw.get("next_query") or "").strip()
+            if status != "covered" and next_query:
                 next_queries.append(
                     {
                         "query": next_query,
@@ -1022,25 +680,6 @@ class LearningService:
                     }
                 )
         return coverage, next_queries
-
-    @staticmethod
-    def _source_kind_hint(title: str, url: str) -> str | None:
-        """Infer only high-confidence source types; leave ambiguous pages to the agent."""
-        text = f"{title} {url}".casefold()
-        host = urlsplit(url).hostname or ""
-        if host == "arxiv.org" or "doi.org/" in text or " paper" in text:
-            return "paper"
-        if host == "github.com" or " repository" in text:
-            return "repository"
-        if "documentation" in text or "/docs/" in text or "readthedocs" in host:
-            return "documentation"
-        if any(marker in text for marker in ("book", "chapter", "textbook")):
-            return "book"
-        if "slides" in text or "slide deck" in text:
-            return "slides"
-        if "lecture" in text:
-            return "lecture"
-        return None
 
     @staticmethod
     def _add_transcript_entry(
@@ -1131,63 +770,21 @@ class LearningService:
         )
 
     @classmethod
-    def _verified_research(cls, research_output: dict) -> ResearchBrief:
-        """Keep only unique citations backed by a successful browser_read result."""
-        research = ResearchBrief.model_validate(research_output)
-        visited_urls = {
-            normalized
-            for url in getattr(research_output, "visited_urls", ())
-            if (normalized := cls._normalize_evidence_url(url)) is not None
-        }
+    def _verified_sources(cls, raw_sources: list[dict], visited_urls: set[str]) -> list[Source]:
+        """Keep each synthesized source that cites a page actually read; drop malformed ones."""
         verified: list[Source] = []
         seen: set[str] = set()
-        for source in research.sources:
-            normalized = cls._normalize_evidence_url(source.url)
-            if (
-                normalized is None
-                or normalized not in visited_urls
-                or normalized in seen
-                or cls._is_search_results_url(normalized)
-            ):
+        for raw in raw_sources:
+            url = cls._normalize_evidence_url(raw.get("url"))
+            if url is None or url not in visited_urls or url in seen or cls._is_search_results_url(url):
                 continue
-            seen.add(normalized)
-            key_points = [point.strip() for point in source.key_points if point.strip()]
-            if not key_points or any(len(point) < 20 for point in key_points):
+            try:
+                source = Source.model_validate({**raw, "url": url})
+            except ValidationError:
                 continue
-            verified.append(source.model_copy(update={"url": normalized, "key_points": key_points}))
-        selected = {source.url for source in verified}
-        discovered: list[str] = []
-        unavailable: list[str] = []
-        for event in getattr(research_output, "tool_events", ()):
-            metadata = event.metadata if isinstance(event.metadata, dict) else {}
-            if "browser_search" in event.tool_name:
-                for url in metadata.get("urls", []):
-                    normalized = cls._normalize_evidence_url(url)
-                    if normalized and normalized not in discovered:
-                        discovered.append(normalized)
-            if "browser_read" in event.tool_name:
-                for page in metadata.get("page_results", []):
-                    if not isinstance(page, dict) or page.get("status") != "unavailable":
-                        continue
-                    normalized = cls._normalize_evidence_url(page.get("url"))
-                    if normalized and normalized not in unavailable:
-                        unavailable.append(normalized)
-        ledger = [
-            SourceVisit(url=url, status="read", selected=url in selected)
-            for url in sorted(visited_urls)
-        ]
-        read_urls = {entry.url for entry in ledger}
-        ledger.extend(
-            SourceVisit(url=url, status="discovered", selected=False)
-            for url in discovered
-            if url not in read_urls and url not in unavailable
-        )
-        ledger.extend(
-            SourceVisit(url=url, status="unavailable", selected=False)
-            for url in unavailable
-            if url not in read_urls
-        )
-        return research.model_copy(update={"sources": verified, "visited_sources": ledger})
+            seen.add(url)
+            verified.append(source)
+        return verified
 
     @classmethod
     def _planned_modules(
@@ -1196,65 +793,52 @@ class LearningService:
         planner_output: dict,
         research: ResearchBrief,
     ) -> list[dict]:
-        """Validate the planner's chapter/section structure and turn it into lesson drafts.
+        """Turn the planner's chapters into modules and its sections into lesson drafts.
 
-        Chapters become curriculum modules (numbered in order) and sections become
-        lessons; ids, sources, and hours are derived here rather than asked of the model.
+        The schema already enforces required fields; here we only check what it cannot:
+        coverage ids must be ones research covered, every covered requirement needs a
+        section, and the course must fit the learner's time budget.
         """
         try:
             plan = PlannerOutput.model_validate(planner_output)
         except (TypeError, ValueError) as error:
             raise ValueError(f"Planner returned an invalid chapter structure: {error}") from error
-        if not plan.chapters:
-            raise ValueError("Planner must return at least one chapter.")
-        covered = {item.requirement_id: item for item in research.coverage if item.status == "covered"}
+        covered = {item.requirement_id for item in research.coverage if item.status == "covered"}
         assigned: set[str] = set()
         total_minutes = 0
         modules = []
         for chapter_number, chapter in enumerate(plan.chapters, start=1):
-            # Chapters are numbered by the app; drop a model-added "Chapter 3:" prefix.
-            chapter.title = re.sub(r"^\s*chapter\s+\d+\s*[:.\-\u2013\u2014]\s*", "", chapter.title, flags=re.IGNORECASE)
-            if len(chapter.title.strip()) < 3 or len(chapter.summary.strip()) < 20:
-                raise ValueError(f"Planner chapter {chapter_number} needs a title and a summary.")
-            if not chapter.sections:
-                raise ValueError(f"Planner chapter {chapter_number} needs at least one section.")
             lessons = []
             for section_number, section in enumerate(chapter.sections, start=1):
-                where = f"chapter {chapter_number} section {section_number}"
-                if len(section.title.strip()) < 3 or len(section.objective.strip()) < 12:
-                    raise ValueError(f"Planner {where} needs a title and an objective.")
-                if covered and not 1 <= len(section.coverage_ids) <= 3:
-                    raise ValueError(f"Planner {where} must map to 1-3 coverage requirements.")
-                if unknown := [item for item in section.coverage_ids if covered and item not in covered]:
-                    raise ValueError(f"Planner {where} uses coverage ids that research did not cover: {', '.join(unknown)}")
-                key_points = [point.strip() for point in section.key_points if point.strip()]
-                if not key_points:
-                    raise ValueError(f"Planner {where} needs at least one key point.")
-                if not 15 <= section.estimated_minutes <= 120:
-                    raise ValueError(f"Planner {where} needs estimated_minutes between 15 and 120.")
+                if unknown := [item for item in section.coverage_ids if item not in covered]:
+                    raise ValueError(
+                        f"Planner chapter {chapter_number} section {section_number} uses coverage ids "
+                        f"that research did not cover: {', '.join(unknown)}"
+                    )
                 assigned.update(section.coverage_ids)
                 total_minutes += section.estimated_minutes
                 lessons.append({
                     "id": f"chapter-{chapter_number}-section-{section_number}",
-                    "title": section.title.strip(),
-                    "objective": section.objective.strip(),
+                    "title": section.title,
+                    "objective": section.objective,
                     "coverage_ids": list(dict.fromkeys(section.coverage_ids)),
-                    "section_plan": key_points,
+                    "section_plan": section.key_points,
                     "paragraphs": [],
                     "estimated_minutes": section.estimated_minutes,
                 })
             minutes = sum(lesson["estimated_minutes"] for lesson in lessons)
             modules.append({
                 "week": chapter_number,  # chapter number; the field name predates chapters
-                "title": chapter.title.strip(),
-                "overview": chapter.summary.strip(),
+                # Chapters are numbered by the app; drop a model-added "Chapter 3:" prefix.
+                "title": re.sub(r"^\s*chapter\s+\d+\s*[:.\-\u2013\u2014]\s*", "", chapter.title, flags=re.IGNORECASE),
+                "overview": chapter.summary,
                 "outcomes": [lesson["objective"] for lesson in lessons],
                 "coverage_ids": list(dict.fromkeys(i for lesson in lessons for i in lesson["coverage_ids"])),
                 "source_urls": [],
                 "estimated_hours": max(1, math.ceil(minutes / 60)),
                 "lessons": lessons,
             })
-        if missing := sorted(set(covered) - assigned):
+        if missing := sorted(covered - assigned):
             raise ValueError(f"Planner left covered research requirements without a section: {', '.join(missing)}")
         budget = goal.weeks * goal.hours_per_week * 60
         if total_minutes > budget:
@@ -1272,22 +856,15 @@ class LearningService:
         research: ResearchBrief,
     ) -> list[CurriculumModule]:
         """Validate complete provider-authored lessons and their evidence links."""
-        payload = planner_output.get("curriculum") if isinstance(planner_output, dict) else None
-        if not isinstance(payload, list):
-            raise ValueError("Planner must return a curriculum array.")  # noqa: TRY004
         try:
-            modules = [CurriculumModule.model_validate(item) for item in payload]
+            modules = [CurriculumModule.model_validate(item) for item in planner_output["curriculum"]]
         except (TypeError, ValueError) as error:
-            raise ValueError("Planner returned an invalid curriculum structure.") from error
-
-        if not modules:
-            raise ValueError("Planner must return at least one chapter.")
+            raise ValueError(f"Lesson writer returned an invalid lesson structure: {error}") from error
 
         verified_sources = {source.url: source for source in research.sources}
         verified_urls = set(verified_sources)
         coverage_by_id = {item.requirement_id: item for item in research.coverage}
-        if coverage_by_id:
-            cls._require_complete_research(research)
+        covered_ids = {key for key, item in coverage_by_id.items() if item.status == "covered"}
         coverage_support = {
             requirement_id: {
                 normalized
@@ -1296,24 +873,21 @@ class LearningService:
             }
             for requirement_id, item in coverage_by_id.items()
         }
-        seen_lesson_ids: set[str] = set()
         course_coverage_ids: set[str] = set()
         grounded: list[CurriculumModule] = []
         for module in sorted(modules, key=lambda item: item.week):
-            cls._validate_module_content(module, goal)
             module_coverage_ids = cls._grounded_coverage_ids(
                 module.coverage_ids,
                 coverage_by_id,
                 f"module week {module.week}",
             ) if coverage_by_id else []
-            if not module.lessons:
-                raise ValueError(f"Planner chapter {module.week} must contain at least one section.")
             lessons: list[Lesson] = []
             for lesson in module.lessons:
-                if lesson.id in seen_lesson_ids:
-                    raise ValueError(f"Planner lesson id must be unique: {lesson.id}")
-                seen_lesson_ids.add(lesson.id)
-                cls._validate_lesson_content(lesson, module.week)
+                if len(lesson.paragraphs) != len(lesson.section_plan):
+                    raise ValueError(
+                        f"Lesson {lesson.id} must have one paragraph per key point "
+                        f"({len(lesson.section_plan)}), got {len(lesson.paragraphs)}."
+                    )
                 lesson_coverage_ids = cls._grounded_coverage_ids(
                     lesson.coverage_ids,
                     coverage_by_id,
@@ -1398,8 +972,8 @@ class LearningService:
                     }
                 )
             )
-        if coverage_by_id and course_coverage_ids != set(coverage_by_id):
-            missing = sorted(set(coverage_by_id) - course_coverage_ids)
+        if coverage_by_id and course_coverage_ids != covered_ids:
+            missing = sorted(covered_ids - course_coverage_ids)
             raise ValueError(
                 "Planner curriculum does not cover every verified research requirement: "
                 + ", ".join(missing)
@@ -1407,26 +981,10 @@ class LearningService:
         return grounded
 
     @staticmethod
-    def _require_complete_research(research: ResearchBrief) -> None:
-        """Do not turn acknowledged evidence gaps into an apparently complete course."""
-        if not research.coverage:
-            raise ValueError("Research did not return a curriculum coverage ledger.")
-        incomplete = [
-            item.requirement_id for item in research.coverage if item.status != "covered"
-        ]
-        if research.stop_reason != "coverage_satisfied" or incomplete:
-            detail = ", ".join(incomplete) if incomplete else str(research.stop_reason)
-            raise ValueError(
-                "Research coverage is incomplete; course generation stopped before writing lessons: "
-                + detail
-            )
-
-    @staticmethod
-    def _validate_module_content(module: CurriculumModule, goal: LearningGoal) -> None:
-        if len(module.title.strip()) < 3 or len(module.overview.strip()) < 20:
-            raise ValueError(f"Planner chapter {module.week} needs a complete title and summary.")
-        if not module.outcomes or any(len(outcome.strip()) < 10 for outcome in module.outcomes):
-            raise ValueError(f"Planner chapter {module.week} needs concrete section objectives.")
+    def _require_covered_research(research: ResearchBrief) -> None:
+        """Generate a course from whatever research covered; stop only if it covered nothing."""
+        if not research.sources or not any(item.status == "covered" for item in research.coverage):
+            raise ValueError("Research did not cover any part of the requested topic, so no course was generated.")
 
     @classmethod
     def _grounded_source_urls(
@@ -1465,56 +1023,6 @@ class LearningService:
         if not grounded:
             raise ValueError(f"Planner must assign at least one coverage requirement to {owner}.")
         return grounded
-
-    @staticmethod
-    def _validate_lesson_content(lesson: Lesson, week: int) -> None:
-        fields = {
-            "title": (lesson.title, 3),
-            "objective": (lesson.objective, 12),
-        }
-        for name, (value, minimum) in fields.items():
-            if not isinstance(value, str) or len(value.strip()) < minimum:
-                raise ValueError(
-                    f"Planner lesson {lesson.id or '<unknown>'} in week {week} needs complete {name}."
-                )
-        if not lesson.section_plan:
-            raise ValueError(
-                f"Planner lesson {lesson.id or '<unknown>'} in chapter {week} needs at least one key point."
-            )
-        if len(set(item.strip().casefold() for item in lesson.section_plan)) != len(lesson.section_plan):
-            raise ValueError(f"Planner lesson {lesson.id} repeats a section-plan item.")
-        if len(lesson.paragraphs) != len(lesson.section_plan):
-            raise ValueError(
-                f"Planner lesson {lesson.id or '<unknown>'} must expand every planned teaching section."
-            )
-        headings = [paragraph.heading.strip() for paragraph in lesson.paragraphs]
-        if any(len(heading) < 3 for heading in headings) or len(
-            set(heading.casefold() for heading in headings)
-        ) != len(headings):
-            raise ValueError(f"Planner lesson {lesson.id} needs distinct paragraph headings.")
-        texts = [paragraph.text.strip() for paragraph in lesson.paragraphs]
-        word_count = sum(len(text.split()) for text in texts)
-        # One paragraph per key point, about 200-300 words each (1,200-1,800 for six).
-        if not 150 * len(texts) <= word_count <= 300 * len(texts):
-            raise ValueError(
-                f"Lesson {lesson.id or '<unknown>'} in chapter {week} must contain {150 * len(texts)}-"
-                f"{300 * len(texts)} substantive words for its {len(texts)} key points."
-            )
-        normalized = [re.sub(r"\s+", " ", text.casefold()) for text in texts]
-        if len(set(normalized)) != len(normalized):
-            raise ValueError(f"Planner lesson {lesson.id} repeats a paragraph.")
-        all_sentences: list[str] = []
-        for text in texts:
-            sentences = [
-                re.sub(r"\s+", " ", sentence.strip().casefold())
-                for sentence in re.split(r"(?<=[.!?])\s+", text)
-                if len(sentence.split()) >= 5
-            ]
-            if len(sentences) >= 3 and len(set(sentences)) / len(sentences) < 0.75:
-                raise ValueError(f"Planner lesson {lesson.id} repeats sentences instead of teaching the topic.")
-            all_sentences.extend(sentences)
-        if any(count > 2 for count in Counter(all_sentences).values()):
-            raise ValueError(f"Planner lesson {lesson.id} repeats sentences across paragraphs.")
 
     @staticmethod
     def _normalize_evidence_url(url: object) -> str | None:
