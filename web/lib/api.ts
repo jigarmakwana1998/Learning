@@ -1,33 +1,10 @@
 export type User = { id: string; email: string; role: "learner" | "admin" };
 export type TopicIntent = { topic: string; level: "beginner" | "intermediate" | "advanced"; hoursPerWeek: number; weeks: number };
-export type Source = { title: string; url: string; kind: "documentation" | "paper" | "book" | "lecture" | "slides" | "article" | "repository"; rationale: string; key_points?: string[] };
-export type SourceVisit = { url: string; title?: string; status: "discovered" | "read" | "unavailable"; selected: boolean };
-export type ResearchCoverage = { requirement_id: string; question: string; priority: "core" | "supporting"; depth: "overview" | "detailed"; evidence_policy: "single_source_ok" | "corroborate"; status: "covered" | "partial" | "missing"; confidence: number; supported_by: string[]; rationale: string };
-export type ResearchStats = { rounds: number; searches: number; pages_attempted: number; pages_read: number; sources_selected: number };
+export type CoverageItem = { id: string; question: string; status: "missing" | "partial" | "covered" };
+export type SavedPage = { url: string; title: string; kind: "documentation" | "paper" | "book" | "lecture" | "slides" | "article" | "repository"; why: string; key_points: string[]; covers: string[] };
+export type ResearchRun = { id: string; topic: string; status: "running" | "completed" | "failed"; error?: string | null; activity?: string | null; coverage: CoverageItem[]; pages: SavedPage[] };
 
 export type AgentHarness = "deep-agents";
-export type ResearchBrief = { topic: string; sources: Source[]; visited_sources?: SourceVisit[]; coverage?: ResearchCoverage[]; stop_reason?: "coverage_satisfied" | "budget_exhausted" | "no_new_evidence" | null; warnings?: string[]; research_stats?: ResearchStats };
-export type LearningRun = { id: string; harness: AgentHarness; research: ResearchBrief; sessions: Record<string, string> };
-
-export type AgentTrace = {
-  run_id: string;
-  sessions: Array<{
-    id: string;
-    agent_name: string;
-    harness: AgentHarness;
-    status: string;
-    duration_ms?: number;
-    transcript: Array<{ role: string; content: string; created_at: string }>;
-    tool_invocations: Array<{
-      tool_name: string;
-      status: string;
-      duration_ms?: number;
-      metadata?: { query?: string; purpose?: string; urls?: string[]; domains?: string[]; result_count?: number; success_count?: number; page_results?: Array<{ url: string; status: "read" | "unavailable" }> };
-      error?: string;
-      created_at: string;
-    }>;
-  }>;
-};
 
 export type TraceEvent = {
   id: string; session_id: string; sequence: number; event_type: "lifecycle" | "harness" | "model" | "tool";
@@ -60,24 +37,8 @@ export type AuthResult = { access_token: string | null; role: User["role"]; mess
 export const login = (email: string, password: string) => request<AuthResult>("/auth/login", { method: "POST", body: JSON.stringify({ email, password }) });
 export const register = (email: string, password: string) => request<AuthResult>("/auth/register", { method: "POST", body: JSON.stringify({ email, password }) });
 export const getMe = (token: string) => request<User>("/auth/me", {}, token);
-export async function createLearningRun(intent: TopicIntent, token: string): Promise<LearningRun> {
-  const { id } = await request<{ id: string }>("/learning-runs", { method: "POST", body: JSON.stringify({ topic: intent.topic, level: intent.level, hours_per_week: intent.hoursPerWeek, weeks: intent.weeks }) }, token);
-  // Research can take minutes; poll instead of holding one request open.
-  // A status check can blip (e.g. a transient auth 502); only give up after 3 in a row.
-  for (let failures = 0; ; ) {
-    await new Promise((resolve) => setTimeout(resolve, 5000));
-    let run: { status: string; error?: string | null };
-    try {
-      run = await request(`/learning-runs/${id}/status`, {}, token);
-      failures = 0;
-    } catch (error) {
-      if (++failures >= 3) throw error;
-      continue;
-    }
-    if (run.status === "completed") return request<LearningRun>(`/learning-runs/${id}`, {}, token);
-    if (run.status === "failed") throw new Error(run.error ?? "Research failed.");
-  }
-}
-export const getLearningRunTrace = (runId: string, token: string) => request<AgentTrace>(`/learning-runs/${runId}/trace`, {}, token);
+export const startResearchRun = (intent: TopicIntent, token: string) =>
+  request<{ id: string }>("/research-runs", { method: "POST", body: JSON.stringify({ topic: intent.topic, level: intent.level, hours_per_week: intent.hoursPerWeek, weeks: intent.weeks }) }, token);
+export const getResearchRun = (id: string, token: string) => request<ResearchRun>(`/research-runs/${id}`, {}, token);
 export const getTraceRuns = (token: string) => request<TraceRunListItem[]>("/observability/runs", {}, token);
 export const getTraceRun = (runId: string, token: string) => request<TraceRun>(`/observability/runs/${runId}`, {}, token);

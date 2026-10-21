@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useState } from "react";
 import {
   ActivityIndicator,
   Alert,
@@ -12,20 +12,7 @@ import {
   View,
 } from "react-native";
 
-import {
-  createLearningRun,
-  getLearningRunTrace,
-  getMe,
-  LearningRun,
-  LearningRunTrace,
-  login,
-  logout,
-  register,
-  Source,
-  User,
-} from "@/lib/api";
-
-type CourseView = "coverage" | "sources" | "trace";
+import { getMe, getResearchRun, login, logout, register, ResearchRun, startResearchRun, User } from "@/lib/api";
 
 function openPublicUrl(url: string) {
   if (!url.startsWith("https://")) return;
@@ -39,17 +26,16 @@ export default function HomeScreen() {
   const [hours, setHours] = useState("5");
   const [user, setUser] = useState<User | null>(null);
   const [loading, setLoading] = useState(false);
-  const [plan, setPlan] = useState<LearningRun | null>(null);
-  const [courseView, setCourseView] = useState<CourseView>("coverage");
-  const [trace, setTrace] = useState<LearningRunTrace | null>(null);
-  const [traceError, setTraceError] = useState("");
+  const [run, setRun] = useState<ResearchRun | null>(null);
 
   useEffect(() => { getMe().then(setUser).catch(() => undefined); }, []);
 
-  const sourcesByUrl = useMemo(
-    () => new Map((plan?.research.sources ?? []).map((source) => [source.url, source])),
-    [plan],
-  );
+  // Poll while the agent works so coverage and pages appear as they arrive.
+  useEffect(() => {
+    if (run?.status !== "running") return;
+    const timer = setTimeout(() => { getResearchRun(run.id).then(setRun).catch(() => undefined); }, 2000);
+    return () => clearTimeout(timer);
+  }, [run]);
 
   async function signIn(mode: "login" | "register") {
     setLoading(true);
@@ -69,26 +55,11 @@ export default function HomeScreen() {
     }
     setLoading(true);
     try {
-      const nextPlan = await createLearningRun(topic.trim(), Number(hours) || 5);
-      setPlan(nextPlan);
-      setCourseView("coverage");
-      setTrace(null);
-      setTraceError("");
+      setRun(await getResearchRun((await startResearchRun(topic.trim(), Number(hours) || 5)).id));
     } catch (error) {
       Alert.alert("Could not research this topic", error instanceof Error ? error.message : "Please try again.");
     } finally {
       setLoading(false);
-    }
-  }
-
-  async function showTrace() {
-    setCourseView("trace");
-    if (!plan || trace) return;
-    setTraceError("");
-    try {
-      setTrace(await getLearningRunTrace(plan.id));
-    } catch (error) {
-      setTraceError(error instanceof Error ? error.message : "The transcript could not be loaded.");
     }
   }
 
@@ -124,18 +95,12 @@ export default function HomeScreen() {
               {loading ? <ActivityIndicator color="#fff" /> : <Text style={styles.primaryButtonText}>Research this topic</Text>}
             </Pressable>
 
-            {plan && (
+            {run && (
               <View style={styles.courseShell}>
-                <Text style={styles.cardTitle}>{plan.research.topic}</Text>
-                <View accessibilityRole="tablist" style={styles.tabs}>
-                  <Tab active={courseView === "coverage"} label="Coverage" onPress={() => setCourseView("coverage")} />
-                  <Tab active={courseView === "sources"} label="Sources" onPress={() => setCourseView("sources")} />
-                  <Tab active={courseView === "trace"} label="Agent trace" onPress={showTrace} />
-                </View>
-
-                {courseView === "coverage" && <CoverageList plan={plan} sourcesByUrl={sourcesByUrl} />}
-                {courseView === "sources" && <SourceLedger plan={plan} />}
-                {courseView === "trace" && <TracePanel trace={trace} error={traceError} onRetry={showTrace} />}
+                <Text style={styles.cardTitle}>{run.topic}</Text>
+                {run.status === "running" && <View style={styles.visitHeader}><ActivityIndicator color="#6657d9" /><Text style={[styles.bodyMuted, styles.signedIn]} numberOfLines={2}>{run.activity ?? "Planning what to cover..."}</Text></View>}
+                {run.status === "failed" && <Text style={styles.error}>{run.error ?? "Research failed. Please try again."}</Text>}
+                <CoverageList run={run} />
               </View>
             )}
           </>
@@ -145,92 +110,28 @@ export default function HomeScreen() {
   );
 }
 
-function Tab({ active, label, onPress }: { active: boolean; label: string; onPress: () => void }) {
-  return (
-    <Pressable accessibilityRole="tab" accessibilityState={{ selected: active }} onPress={onPress} style={({ pressed }) => [styles.tab, active && styles.activeTab, pressed && styles.pressed]}>
-      <Text style={[styles.tabText, active && styles.activeTabText]}>{label}</Text>
-    </Pressable>
-  );
-}
-
-function CoverageList({ plan, sourcesByUrl }: { plan: LearningRun; sourcesByUrl: Map<string, Source> }) {
+function CoverageList({ run }: { run: ResearchRun }) {
   return (
     <View style={styles.sectionStack}>
-      {(plan.research.coverage ?? []).map((item) => (
-        <View key={item.requirement_id} style={styles.module}>
-          <Text style={styles.kicker}>{item.status.toUpperCase()}</Text>
-          <Text style={styles.sectionTitle}>{item.question}</Text>
-          {item.supported_by.map((url) => sourcesByUrl.get(url)).filter((source): source is Source => Boolean(source)).map((source) => (
-            <View key={source.url} style={styles.lesson}>
-              <Pressable accessibilityRole="link" onPress={() => openPublicUrl(source.url)} style={({ pressed }) => [styles.sourceLink, pressed && styles.pressed]}>
-                <Text style={styles.sourceLinkText}>{source.title}</Text>
-                <Text style={styles.urlText} numberOfLines={2}>{source.url}</Text>
-              </Pressable>
-              {(source.key_points ?? []).map((point) => <Text key={point} style={styles.bullet}>• {point}</Text>)}
-            </View>
-          ))}
-        </View>
-      ))}
-    </View>
-  );
-}
-
-function SourceLedger({ plan }: { plan: LearningRun }) {
-  const visits = plan.research.visited_sources ?? [];
-  const coverage = plan.research.coverage ?? [];
-  const coveredCount = coverage.filter((item) => item.status === "covered").length;
-  return (
-    <View style={styles.sectionStack}>
-      <View>
-        <Text style={styles.sectionTitle}>Sources read</Text>
-        <Text style={styles.bodyMuted}>{plan.research.sources.length} verified source{plan.research.sources.length === 1 ? "" : "s"} grounded the research after reading {visits.filter((item) => item.status === "read").length} pages.</Text>
-        {coverage.length ? <Text style={styles.bodyMuted}>Coverage: {coveredCount}/{coverage.length} requirements covered · {plan.research.stop_reason?.replaceAll("_", " ")}</Text> : null}
-        {plan.research.warnings?.map((warning) => <Text key={warning} style={styles.error}>{warning}</Text>)}
-      </View>
-      {plan.research.sources.length ? plan.research.sources.map((source) => (
-        <View key={source.url} style={styles.sourceCard}>
-          <Text style={styles.kicker}>{source.kind.toUpperCase()}</Text>
-          <Pressable accessibilityRole="link" onPress={() => openPublicUrl(source.url)}><Text style={styles.sourceTitle}>{source.title}</Text><Text style={styles.urlText}>{source.url}</Text></Pressable>
-          <Text style={styles.bodyMuted}>{source.rationale}</Text>
-          {source.key_points?.map((point) => <Text key={point} style={styles.bullet}>• {point}</Text>)}
-        </View>
-      )) : <Text style={styles.error}>This run found no verified sources.</Text>}
-
-      <Text style={styles.sectionTitle}>Every page visited</Text>
-      {visits.length ? visits.map((visit, index) => (
-        <Pressable key={`${visit.url}-${index}`} accessibilityRole="link" onPress={() => openPublicUrl(visit.url)} style={({ pressed }) => [styles.visit, pressed && styles.pressed]}>
-          <View style={styles.visitHeader}><Text style={styles.visitStatus}>{visit.status.toUpperCase()}</Text>{visit.selected && <Text style={styles.selected}>USED</Text>}</View>
-          <Text style={styles.sourceTitle}>{visit.title ?? visit.url}</Text>
-          <Text style={styles.urlText}>{visit.url}</Text>
-        </Pressable>
-      )) : <Text style={styles.empty}>No browser visits were recorded.</Text>}
-    </View>
-  );
-}
-
-function TracePanel({ trace, error, onRetry }: { trace: LearningRunTrace | null; error: string; onRetry: () => void }) {
-  if (error) return <View style={styles.error}><Text style={styles.errorTitle}>Transcript unavailable</Text><Text style={styles.body}>{error}</Text><Pressable onPress={onRetry} style={styles.secondaryButton}><Text style={styles.secondaryButtonText}>Try again</Text></Pressable></View>;
-  if (!trace) return <View style={styles.loading}><ActivityIndicator color="#6657d9" /><Text style={styles.bodyMuted}>Loading every agent session...</Text></View>;
-  return (
-    <View style={styles.sectionStack}>
-      <Text style={styles.bodyMuted}>This is the durable transcript for every research and writing stage. Browser page bodies are intentionally not stored.</Text>
-      {trace.sessions.map((session) => (
-        <View key={session.id} style={styles.traceSession}>
-          <View style={styles.visitHeader}><Text style={styles.sectionTitle}>{session.agent_name}</Text><Text style={styles.visitStatus}>{session.status.toUpperCase()}</Text></View>
-          {session.transcript.map((entry, index) => (
-            <View key={`${entry.created_at}-${index}`} style={styles.traceEntry}><Text style={styles.kicker}>{entry.role.toUpperCase()}</Text><Text selectable style={styles.traceText}>{entry.content}</Text></View>
-          ))}
-          {session.tool_invocations.map((tool, index) => (
-            <View key={`${tool.created_at}-${index}`} style={styles.toolEntry}>
-              <Text style={styles.practiceTitle}>{tool.tool_name} · {tool.status}</Text>
-              {tool.metadata?.query ? <Text style={styles.sourceTitle}>{tool.metadata.query}</Text> : null}
-              {tool.metadata?.purpose ? <Text style={styles.bodyMuted}>{tool.metadata.purpose}</Text> : null}
-              {(tool.metadata?.page_results ?? []).map((page) => <Pressable key={page.url} onPress={() => openPublicUrl(page.url)}><Text style={styles.urlText}>{page.status}: {page.url}</Text></Pressable>)}
-              {!(tool.metadata?.page_results?.length) && tool.metadata?.urls?.map((url) => <Text key={url} style={styles.urlText}>{url}</Text>)}
-            </View>
-          ))}
-        </View>
-      ))}
+      {run.coverage.map((item) => {
+        const pages = run.pages.filter((page) => page.covers.includes(item.id));
+        return (
+          <View key={item.id} style={styles.module}>
+            <Text style={styles.kicker}>{item.status.toUpperCase()}</Text>
+            <Text style={styles.sectionTitle}>{item.question}</Text>
+            {pages.length ? pages.map((page) => (
+              <View key={page.url} style={styles.lesson}>
+                <Pressable accessibilityRole="link" onPress={() => openPublicUrl(page.url)} style={({ pressed }) => [styles.sourceLink, pressed && styles.pressed]}>
+                  <Text style={styles.sourceLinkText}>{page.title}</Text>
+                  <Text style={styles.urlText} numberOfLines={2}>{page.url}</Text>
+                </Pressable>
+                <Text style={styles.bodyMuted}>{page.why}</Text>
+                {page.key_points.map((point) => <Text key={point} style={styles.bullet}>• {point}</Text>)}
+              </View>
+            )) : <Text style={styles.empty}>{run.status === "running" ? "Looking for pages..." : "No page found for this."}</Text>}
+          </View>
+        );
+      })}
     </View>
   );
 }
@@ -245,8 +146,6 @@ const styles = StyleSheet.create({
   input: { backgroundColor: "#fff", borderColor: "#ddd9ea", borderWidth: 1, borderRadius: 12, paddingHorizontal: 14, minHeight: 50, fontSize: 16 },
   primaryButton: { backgroundColor: "#6657d9", borderRadius: 12, minHeight: 52, alignItems: "center", justifyContent: "center", marginTop: 4, paddingHorizontal: 16 },
   primaryButtonText: { color: "#fff", fontWeight: "800", fontSize: 16 },
-  secondaryButton: { borderWidth: 1, borderColor: "#6657d9", borderRadius: 10, minHeight: 48, alignItems: "center", justifyContent: "center", marginTop: 12 },
-  secondaryButtonText: { color: "#4b3fc1", fontWeight: "800" },
   textButton: { minHeight: 44, justifyContent: "center", paddingHorizontal: 4 },
   pressed: { opacity: 0.72 },
   disabled: { opacity: 0.55 },
@@ -256,40 +155,17 @@ const styles = StyleSheet.create({
   userRow: { flexDirection: "row", justifyContent: "space-between", alignItems: "center", gap: 8 },
   signedIn: { flex: 1, color: "#332f46" },
   courseShell: { backgroundColor: "#fff", borderRadius: 18, padding: 16, marginTop: 16, gap: 16, borderWidth: 1, borderColor: "#e6e3ef" },
-  tabs: { flexDirection: "row", flexWrap: "wrap", gap: 8, borderBottomWidth: 1, borderBottomColor: "#eceaf3", paddingBottom: 12 },
-  tab: { minHeight: 44, paddingHorizontal: 14, justifyContent: "center", borderRadius: 10 },
-  activeTab: { backgroundColor: "#eeeafe" },
-  tabText: { color: "#686579", fontWeight: "700" },
-  activeTabText: { color: "#4b3fc1" },
   sectionStack: { gap: 20 },
   module: { gap: 10 },
   kicker: { color: "#6657d9", fontSize: 12, fontWeight: "800", letterSpacing: 0.7 },
   sectionTitle: { fontSize: 19, lineHeight: 25, fontWeight: "800", color: "#28243b" },
   bodyMuted: { color: "#686579", fontSize: 15, lineHeight: 23 },
   lesson: { borderTopWidth: 1, borderTopColor: "#eceaf3", paddingTop: 18, gap: 10 },
-  lessonTitle: { color: "#1d1b2e", fontSize: 24, lineHeight: 30, fontWeight: "800" },
-  objective: { color: "#565166", fontSize: 17, lineHeight: 25 },
-  paragraph: { gap: 9, marginTop: 10 },
-  body: { color: "#2f2b3f", fontSize: 16, lineHeight: 27 },
-  citationLabel: { color: "#332f46", fontSize: 12, fontWeight: "800", marginTop: 3 },
   sourceLink: { minHeight: 44, justifyContent: "center", borderLeftWidth: 2, borderLeftColor: "#8b7fe5", paddingLeft: 10 },
   sourceLinkText: { color: "#4b3fc1", fontSize: 14, lineHeight: 20, fontWeight: "700" },
   urlText: { color: "#5f58a8", fontSize: 12, lineHeight: 18, marginTop: 2 },
-  practice: { backgroundColor: "#f2f0fb", borderRadius: 12, padding: 14, gap: 8, marginTop: 8 },
-  practiceTitle: { color: "#332f46", fontWeight: "800" },
-  sourceCard: { borderBottomWidth: 1, borderBottomColor: "#eceaf3", paddingBottom: 16, gap: 7 },
-  sourceTitle: { color: "#4b3fc1", fontSize: 15, lineHeight: 21, fontWeight: "800" },
   bullet: { color: "#3e394e", fontSize: 14, lineHeight: 21 },
   empty: { backgroundColor: "#f3f1f7", borderRadius: 12, padding: 14, color: "#686579", lineHeight: 21 },
-  visit: { backgroundColor: "#f8f7fb", borderRadius: 12, padding: 12, minHeight: 64, gap: 5 },
   visitHeader: { flexDirection: "row", justifyContent: "space-between", alignItems: "center", gap: 8 },
-  visitStatus: { color: "#686579", fontSize: 11, fontWeight: "800" },
-  selected: { color: "#18683a", backgroundColor: "#dcf5e5", borderRadius: 6, overflow: "hidden", paddingHorizontal: 6, paddingVertical: 3, fontSize: 10, fontWeight: "800" },
   error: { backgroundColor: "#fff0f0", borderColor: "#d45b5b", borderWidth: 1, borderRadius: 12, padding: 14 },
-  errorTitle: { color: "#812b2b", fontWeight: "800", marginBottom: 4 },
-  loading: { minHeight: 120, alignItems: "center", justifyContent: "center", gap: 10 },
-  traceSession: { borderWidth: 1, borderColor: "#e6e3ef", borderRadius: 14, padding: 14, gap: 12 },
-  traceEntry: { backgroundColor: "#f8f7fb", borderRadius: 10, padding: 12, gap: 6 },
-  traceText: { color: "#332f46", fontSize: 13, lineHeight: 20, fontFamily: "monospace" },
-  toolEntry: { borderLeftWidth: 2, borderLeftColor: "#8b7fe5", paddingLeft: 10, gap: 5 },
 });
