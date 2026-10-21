@@ -1212,6 +1212,8 @@ class LearningService:
         total_minutes = 0
         modules = []
         for chapter_number, chapter in enumerate(plan.chapters, start=1):
+            # Chapters are numbered by the app; drop a model-added "Chapter 3:" prefix.
+            chapter.title = re.sub(r"^\s*chapter\s+\d+\s*[:.\-\u2013\u2014]\s*", "", chapter.title, flags=re.IGNORECASE)
             if len(chapter.title.strip()) < 3 or len(chapter.summary.strip()) < 20:
                 raise ValueError(f"Planner chapter {chapter_number} needs a title and a summary.")
             if not chapter.sections:
@@ -1226,8 +1228,8 @@ class LearningService:
                 if unknown := [item for item in section.coverage_ids if covered and item not in covered]:
                     raise ValueError(f"Planner {where} uses coverage ids that research did not cover: {', '.join(unknown)}")
                 key_points = [point.strip() for point in section.key_points if point.strip()]
-                if not 5 <= len(key_points) <= 7 or len({point.casefold() for point in key_points}) != len(key_points):
-                    raise ValueError(f"Planner {where} needs 5-7 distinct key points.")
+                if not 3 <= len(key_points) <= 7 or len({point.casefold() for point in key_points}) != len(key_points):
+                    raise ValueError(f"Planner {where} needs 3-7 distinct key points.")
                 if not 15 <= section.estimated_minutes <= 120:
                     raise ValueError(f"Planner {where} needs estimated_minutes between 15 and 120.")
                 assigned.update(section.coverage_ids)
@@ -1475,18 +1477,14 @@ class LearningService:
                 raise ValueError(
                     f"Planner lesson {lesson.id or '<unknown>'} in week {week} needs complete {name}."
                 )
-        if not 5 <= len(lesson.section_plan) <= 7 or any(
+        if not 3 <= len(lesson.section_plan) <= 7 or any(
             len(item.strip()) < 10 for item in lesson.section_plan
         ):
             raise ValueError(
-                f"Planner lesson {lesson.id or '<unknown>'} in week {week} needs a 5-7 item teaching section plan."
+                f"Planner lesson {lesson.id or '<unknown>'} in chapter {week} needs 3-7 key points."
             )
         if len(set(item.strip().casefold() for item in lesson.section_plan)) != len(lesson.section_plan):
             raise ValueError(f"Planner lesson {lesson.id} repeats a section-plan item.")
-        if not 5 <= len(lesson.paragraphs) <= 7:
-            raise ValueError(
-                f"Planner lesson {lesson.id or '<unknown>'} in week {week} must contain 5-7 cited paragraphs."
-            )
         if len(lesson.paragraphs) != len(lesson.section_plan):
             raise ValueError(
                 f"Planner lesson {lesson.id or '<unknown>'} must expand every planned teaching section."
@@ -1498,9 +1496,11 @@ class LearningService:
             raise ValueError(f"Planner lesson {lesson.id} needs distinct paragraph headings.")
         texts = [paragraph.text.strip() for paragraph in lesson.paragraphs]
         word_count = sum(len(text.split()) for text in texts)
-        if not 1200 <= word_count <= 1800:
+        # One paragraph per key point, about 200-300 words each (1,200-1,800 for six).
+        if not 150 * len(texts) <= word_count <= 300 * len(texts):
             raise ValueError(
-                f"Planner lesson {lesson.id or '<unknown>'} in week {week} must contain 1200-1800 substantive words."
+                f"Lesson {lesson.id or '<unknown>'} in chapter {week} must contain {150 * len(texts)}-"
+                f"{300 * len(texts)} substantive words for its {len(texts)} key points."
             )
         normalized = [re.sub(r"\s+", " ", text.casefold()) for text in texts]
         if len(set(normalized)) != len(normalized):

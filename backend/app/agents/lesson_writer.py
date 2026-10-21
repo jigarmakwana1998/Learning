@@ -12,7 +12,7 @@ class LessonWriterAgent(LearningAgent):
             "Write the complete body for exactly one planned lesson using only the supplied browser-verified research. "
             "Populate the structured lesson and paragraph fields. Copy the "
             "lesson id exactly. Return exactly one distinct paragraph for each item in lesson_draft.section_plan, in the same "
-            "order, totaling 1,200-1,800 substantive words (roughly 200-300 words per paragraph). Cover every item in "
+            "order, with roughly 200-300 substantive words per paragraph (1,200-1,800 words for six items). Cover every item in "
             "context.coverage_targets in at least one "
             "paragraph. Each paragraph must declare only the coverage_ids it actually teaches. Teach the topic rather than "
             "describing a study plan: establish the definition and motivation, explain "

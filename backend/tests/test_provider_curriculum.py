@@ -255,12 +255,14 @@ def _chapters(*sections_per_chapter: list[dict]) -> dict:
 
 def test_planner_chapters_become_modules_and_sections_become_lesson_drafts():
     goal = LearningGoal(topic="Python functions", weeks=1, hours_per_week=3)
-    plan = _chapters([_section(["foundations"])], [_section(["mechanism"], minutes=60), _section(["mechanism"])])
+    plan = _chapters([_section(["foundations"], points=4)], [_section(["mechanism"], minutes=60), _section(["mechanism"])])
+    plan["chapters"][1]["title"] = "Chapter 2: Mechanism"
 
     modules = LearningService._planned_modules(goal, plan, _covered_research())
 
     assert [module["week"] for module in modules] == [1, 2]
-    assert [module["title"] for module in modules] == ["Chapter 1", "Chapter 2"]
+    assert [module["title"] for module in modules] == ["Chapter 1", "Mechanism"]  # model numbering stripped
+    assert len(modules[0]["lessons"][0]["section_plan"]) == 4
     second = modules[1]
     assert [lesson["id"] for lesson in second["lessons"]] == ["chapter-2-section-1", "chapter-2-section-2"]
     assert second["coverage_ids"] == ["mechanism"]
@@ -284,9 +286,9 @@ def test_planner_needs_distinct_key_points_and_fits_the_course_budget():
     goal = LearningGoal(topic="Python functions", weeks=1, hours_per_week=1)
     research = _covered_research()
 
-    with pytest.raises(ValueError, match="5-7 distinct key points"):
+    with pytest.raises(ValueError, match="3-7 distinct key points"):
         LearningService._planned_modules(
-            goal, _chapters([_section(["foundations"], points=3), _section(["mechanism"])]), research
+            goal, _chapters([_section(["foundations"], points=2), _section(["mechanism"])]), research
         )
     with pytest.raises(ValueError, match="over the learner's 60-minute budget"):
         LearningService._planned_modules(
