@@ -25,7 +25,6 @@ from langgraph.checkpoint.postgres.aio import AsyncPostgresSaver
 from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
 from pydantic import BaseModel
 
-from app.agents.researcher import SKILLS_DIR
 from app.core.config import Settings, get_settings
 
 logger = logging.getLogger(__name__)
@@ -214,6 +213,7 @@ class DeepAgentRuntime:
         agent_name: str,
         gateway_api_key: str,
         system_prompt: str,
+        skills_dir: Path,
         tools: list[BaseTool] | None = None,
         collector: AgentEventCollector | None = None,
         on_event: Callable[[dict[str, Any]], Awaitable[None]] | None = None,
@@ -226,10 +226,10 @@ class DeepAgentRuntime:
             "requested_reasoning_effort": self.settings.agent_reasoning_effort,
         }
         model = self._model(gateway_api_key, metadata)
-        # Skills are read from disk; everything else (e.g. evicted large tool results) stays in state.
+        # The agent's own skills are read from disk; everything else (e.g. evicted large tool results) stays in state.
         backend = CompositeBackend(
             default=StateBackend(),
-            routes={"/skills/": FilesystemBackend(root_dir=SKILLS_DIR, virtual_mode=True)},
+            routes={"/skills/": FilesystemBackend(root_dir=skills_dir, virtual_mode=True)},
         )
         summarization = SummarizationMiddleware(
             model,

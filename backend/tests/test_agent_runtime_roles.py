@@ -100,6 +100,9 @@ async def test_harness_persists_sanitized_tools_but_not_internal_evidence(monkey
         async def flush(self):
             pass
 
+        async def commit(self):
+            pass
+
     session = SimpleNamespace(
         id="session-id",
         agent_run_id="run-id",

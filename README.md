@@ -8,7 +8,7 @@ One uv workspace (`pyproject.toml` and `uv.lock` at the root):
 
 - `backend/` — FastAPI API (`app/`): auth, research runs, the Deep Agents harness, and tracing
 - `database/` — `learning_db` package: SQLAlchemy models, async session, and Alembic migrations
-- `mcp/` — MCP servers; `mcp/browser/` (`browser_mcp`) is the restricted public-web browser (SearXNG search, hardened Chrome reads) with its pinned `agent-browser` toolchain
+- `mcp/` — MCP servers; `mcp/browser/` (`browser_mcp`) is the restricted public-web browser (SearXNG search, hardened Chrome reads) with its pinned `agent-browser` toolchain; `mcp/course/` (`course_mcp`) serves a research run's source pages and stores the cited course being written
 - `web/` — Next.js client; `mobile/` — Expo Router client (web, iOS, Android)
 - `infra/` — Caddy, LiteLLM and SearXNG configuration for `compose.yml`
 
@@ -89,9 +89,22 @@ One **Researcher** Deep Agent does the work. Its tools are the browser MCP serve
 `browser_search` (SearXNG) and `browser_read` (headless Chrome), plus
 `set_coverage` (what the topic must cover, and how well it is covered) and
 `save_page` (publish a page it has read; unread URLs are rejected). Its skills in
-`backend/app/skills/` (`plan`, `select`, `synthesize`, `evaluate`) are read on
+`backend/app/skills/research/` (`plan`, `select`, `synthesize`, `evaluate`) are read on
 demand with `read_file`; the `task` subagent is disabled. The course length
 (hours per week × weeks) sets how much the plan must cover.
+
+`POST /research-runs/{id}/courses` builds a new course version from a completed
+research run; every version is kept (`GET /research-runs/{id}/courses`). Poll
+`GET /courses/{id}` for the chapters, sections and sources as they are written.
+The first build fetches the full text of the run's saved pages once into
+`source_pages`, so every version cites the same text. The **CourseBuilder** Deep
+Agent works through the course MCP server: `list_sources`, `read_source` and
+`search_sources` return numbered passages (`s2.p7`), `set_outline` sets chapters
+and sections, `write_section` writes one section, and `check_course` lists what is
+left. Every `fact` sentence must cite a passage with a quote that appears in it
+verbatim, or the section is rejected; `explanation` sentences need no citation. A
+number missing from a sentence's quotes is saved with a warning for the learner.
+Its skills are in `backend/app/skills/course/` (`outline`, `write`, `review`).
 
 LiteLLM is the mandatory model gateway: changing the `agent-model` mapping in
 `infra/litellm/config.yaml` swaps the model without changing agent code. Durable
@@ -112,13 +125,13 @@ production use.
 
 ```
 backend/app/
-├── agents/       # Researcher prompt, progress tools, browser MCP client
-├── controllers/  # HTTP route handlers (auth, health, research runs, observability)
+├── agents/       # Researcher and CourseBuilder prompts, tools and MCP clients
+├── controllers/  # HTTP route handlers (auth, health, research runs, courses, observability)
 ├── core/         # configuration, auth dependencies, Supabase, encryption
 ├── harness/      # Deep Agents runtime, LiteLLM gateway, and durable sessions
 ├── schemas/      # API request/response validation
-├── services/     # research runs and their live progress
-├── skills/       # plan, select, synthesize, evaluate (SKILL.md)
+├── services/     # research runs, course builds and their live progress
+├── skills/       # research/ and course/ skills (SKILL.md) for each agent
 └── tracing.py    # trace-event and tool-invocation persistence
 ```
 
