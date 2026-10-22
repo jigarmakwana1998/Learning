@@ -43,7 +43,7 @@ sh mcp/browser/scripts/setup-browser-tools.sh      # Linux or macOS
 
 The scripts use `npm ci`, so the browser version comes from the committed
 lockfile in `mcp/browser/`. The Docker image performs the same setup
-automatically. Put the NVIDIA API key only in the repository-root `.env`;
+automatically. Put the OpenAI API key only in the repository-root `.env`;
 LiteLLM owns that credential, and the API receives only its LiteLLM key.
 
 Copy `backend/.env.example` to `backend/.env`, set the Supabase values and a

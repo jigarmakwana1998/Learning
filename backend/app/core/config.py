@@ -25,7 +25,7 @@ class Settings(BaseModel):
     )
     agent_recursion_limit: int = Field(default_factory=lambda: int(os.getenv("AGENT_RECURSION_LIMIT", "1000")))
     agent_compaction_tokens: int = Field(
-        default_factory=lambda: int(os.getenv("AGENT_COMPACTION_TOKENS", "838860"))
+        default_factory=lambda: int(os.getenv("AGENT_COMPACTION_TOKENS", "320000"))
     )
     agent_compaction_keep_messages: int = Field(
         default_factory=lambda: int(os.getenv("AGENT_COMPACTION_KEEP_MESSAGES", "20"))

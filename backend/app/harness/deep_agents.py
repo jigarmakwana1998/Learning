@@ -285,10 +285,8 @@ class DeepAgentRuntime:
                 "x-litellm-tags": "harness,deepagents",
                 "x-litellm-spend-logs-metadata": json.dumps(metadata),
             },
-            model_kwargs={
-                "reasoning_effort": provider_effort,
-                "extra_body": {"chat_template_kwargs": {"clear_thinking": True}},
-            },
+            # Provider-specific request options belong in the LiteLLM model mapping, not here.
+            model_kwargs={"reasoning_effort": provider_effort},
         )
 
     @asynccontextmanager

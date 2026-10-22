@@ -28,7 +28,7 @@ def test_deep_agent_routes_model_through_litellm_and_maps_medium_reasoning():
     assert model.api_base == "http://litellm:4000"
     assert model.api_key == "session-key"
     assert model.model_kwargs["reasoning_effort"] == "high"
-    assert model.model_kwargs["extra_body"]["chat_template_kwargs"]["clear_thinking"] is True
+    assert model.model_kwargs == {"reasoning_effort": "high"}
     assert json.loads(model.extra_headers["x-litellm-spend-logs-metadata"]) == {
         "session_id": "session-1"
     }
