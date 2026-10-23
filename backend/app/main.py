@@ -4,7 +4,7 @@ from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from app.controllers import auth_router, health_router, research_router, observability_router
+from app.controllers import auth_router, courses_router, health_router, research_router, observability_router
 from app.core.config import get_settings
 from learning_db.session import DATABASE_URL, engine
 from learning_db.models import AgentRun, Base
@@ -41,4 +41,5 @@ app.add_middleware(CORSMiddleware, allow_origins=settings.cors_origins, allow_cr
 app.include_router(health_router)
 app.include_router(auth_router)
 app.include_router(research_router)
+app.include_router(courses_router)
 app.include_router(observability_router)
