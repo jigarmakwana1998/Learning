@@ -3,6 +3,10 @@ export type TopicIntent = { topic: string; level: "beginner" | "intermediate" | 
 export type CoverageItem = { id: string; question: string; status: "missing" | "partial" | "covered" };
 export type SavedPage = { url: string; title: string; kind: "documentation" | "paper" | "book" | "lecture" | "slides" | "article" | "repository"; why: string; key_points: string[]; covers: string[] };
 export type ResearchRun = { id: string; topic: string; status: "running" | "completed" | "failed"; error?: string | null; activity?: string | null; coverage: CoverageItem[]; pages: SavedPage[] };
+export type Sentence = { text: string; kind: "fact" | "explanation"; cites: Array<{ passage: string; quote: string }>; warning: string | null };
+export type Chapter = { id: string; title: string; sections: Array<{ id: string; title: string; covers: string[] }> };
+export type CourseVersion = { id: string; version: number; status: ResearchRun["status"]; created_at: string };
+export type Course = CourseVersion & { research_run_id: string; topic: string; error: string | null; activity: string | null; gaps: string[]; chapters: Chapter[]; sections: Record<string, Sentence[][]>; sources: Array<{ id: string; url: string; title: string }> };
 
 export type AgentHarness = "deep-agents";
 
@@ -40,5 +44,8 @@ export const getMe = (token: string) => request<User>("/auth/me", {}, token);
 export const startResearchRun = (intent: TopicIntent, token: string) =>
   request<{ id: string }>("/research-runs", { method: "POST", body: JSON.stringify({ topic: intent.topic, level: intent.level, hours_per_week: intent.hoursPerWeek, weeks: intent.weeks }) }, token);
 export const getResearchRun = (id: string, token: string) => request<ResearchRun>(`/research-runs/${id}`, {}, token);
+export const buildCourse = (researchRunId: string, token: string) => request<{ id: string }>(`/research-runs/${researchRunId}/courses`, { method: "POST" }, token);
+export const getCourseVersions = (researchRunId: string, token: string) => request<CourseVersion[]>(`/research-runs/${researchRunId}/courses`, {}, token);
+export const getCourse = (id: string, token: string) => request<Course>(`/courses/${id}`, {}, token);
 export const getTraceRuns = (token: string) => request<TraceRunListItem[]>("/observability/runs", {}, token);
 export const getTraceRun = (runId: string, token: string) => request<TraceRun>(`/observability/runs/${runId}`, {}, token);
