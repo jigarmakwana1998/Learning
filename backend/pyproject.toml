@@ -16,7 +16,7 @@ dependencies = [
     "langgraph-checkpoint-sqlite>=3,<4",
     "learning-coach-db",
     # browser-mcp needs mcp<2; litellm>=1.103 needs mcp 2.
-    "litellm>=1.95,<1.103",
+    "litellm>=1.95,<1.107",
     "pydantic>=2.12,<3",
     "python-dotenv>=1,<2",
     "sqlalchemy[asyncio]>=2.0,<3",
