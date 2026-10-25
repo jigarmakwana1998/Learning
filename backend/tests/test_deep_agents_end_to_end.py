@@ -1,4 +1,5 @@
-"""The real Deep Agents graph, driven by a scripted model, researching through a fake browser."""
+"""The real Deep Agents graph, driven by a scripted model: researching through a fake browser,
+and building courses through the real course MCP server."""
 
 from __future__ import annotations
 
@@ -14,11 +15,16 @@ from langchain_core.outputs import ChatGeneration, ChatResult
 from langchain_core.tools import StructuredTool
 from langchain_litellm import ChatLiteLLM
 
+from sqlalchemy import select
+
 from app.agents.researcher import browser_tools
 from app.main import app
+from app.services.course_service import course_service
 from app.services.research_service import research_service
 from browser_mcp.client import AgentBrowserClient
 from browser_mcp.gateway import BrowserGateway
+from learning_db.models import AgentRun, LearningRequest, User
+from learning_db.session import SessionLocal
 
 READ_URL = "https://docs.example.com/source-0"
 
@@ -71,7 +77,7 @@ class ScriptedModel(ChatLiteLLM):
 
     async def _agenerate(self, messages, stop=None, run_manager=None, **kwargs):
         offered.append(sorted(tool["function"]["name"] for tool in kwargs.get("tools", [])))
-        replies.append(messages[-1].content)
+        replies.append(str(messages[-1].content))
         step = script.pop(0)
         return ChatResult(generations=[ChatGeneration(message=step() if callable(step) else step)])
 
@@ -168,3 +174,120 @@ def test_browser_mcp_server_exposes_only_search_and_read(tmp_path, monkeypatch):
             return sorted(tool.name for tool in tools)
 
     assert asyncio.run(tool_names()) == ["browser_read", "browser_search"]
+
+
+SOURCE_URL = "https://docs.example.com/functions"
+SOURCE_TEXT = "Defining functions\n\nA def statement binds a name to a function object.\nThe body is indented.\n"
+COVERAGE = [
+    {"id": "basics", "question": "How is a Python function defined?", "status": "covered"},
+    {"id": "lambdas", "question": "What is a lambda expression?", "status": "missing"},
+]
+
+
+def _sentence(text: str, kind: str = "fact", quote: str | None = None) -> dict:
+    return {"text": text, "kind": kind, "cites": [{"passage": "s1.p2", "quote": quote}] if quote else []}
+
+
+def test_course_builder_writes_cited_versions_through_the_course_mcp_server(monkeypatch):
+    class FakeLiteLLMGateway:
+        async def create_trace_key(self, **_kwargs):
+            return "test-session-trace-key"
+
+        async def spend_logs(self, _api_key):
+            return []
+
+    fetched: list[list[str]] = []
+
+    async def read_pages(urls):
+        fetched.append(urls)
+        return {SOURCE_URL: SOURCE_TEXT}
+
+    outline = [{"id": "c1", "title": "Defining functions", "sections": [
+        {"id": "c1-s1", "title": "The def statement", "covers": ["basics"]},
+        {"id": "c1-s2", "title": "Calling functions", "covers": ["basics"]},
+    ]}]
+    script[:] = [
+        _call("read_file", {"file_path": "/skills/outline/SKILL.md", "limit": 1000}),
+        _call("list_sources", {}),
+        _call("set_outline", {"chapters": outline}),
+        _call("read_source", {"source_id": "s1"}),
+        _call("write_section", {"section_id": "c1-s1", "sentences": [_sentence("A def statement names a function.")]}),
+        # Sentences arrive as one flat list; their paragraph numbers group them.
+        _call("write_section", {"section_id": "c1-s1", "sentences": [
+            _sentence("A def statement binds a name to a function object.", quote="A def statement binds a name to a function object."),
+            {**_sentence("Next, we look at the body.", "explanation"), "paragraph": 2},
+            _sentence("Python 3 kept the def statement.", quote="A def statement binds a name"),
+        ]}),
+        _call("check_course", {}),
+        AIMessage(content="Wrote one cited section."),
+        # Version 2 writes nothing and fails, but version 1 is kept.
+        AIMessage(content="Nothing to write."),
+    ]
+    offered.clear(), replies.clear()
+    monkeypatch.setattr("app.harness.runtime.LiteLLMGateway", FakeLiteLLMGateway)
+    monkeypatch.setattr(
+        "app.harness.deep_agents.DeepAgentRuntime._model",
+        lambda self, api_key, metadata: ScriptedModel(model="litellm_proxy/agent-model", api_base="http://litellm", api_key=api_key),
+    )
+    monkeypatch.setattr(course_service, "read_pages", read_pages)
+
+    email = f"c-{uuid4().hex}@example.com"
+
+    async def research_run(status: str = "completed") -> str:
+        async with SessionLocal() as db:
+            user = await db.scalar(select(User).where(User.email == email))
+            request = LearningRequest(user_id=user.id, topic="Python functions", level="beginner", hours_per_week=3, weeks=1)
+            db.add(request)
+            await db.flush()
+            pages = [{**_page(SOURCE_URL), "title": "Functions"}]
+            run = AgentRun(learning_request_id=request.id, harness="deep-agents", status=status,
+                           result={"coverage": COVERAGE, "pages": pages, "error": None})
+            db.add(run)
+            await db.commit()
+            return run.id
+
+    with TestClient(app) as client:
+        registration = client.post("/auth/register", json={"email": email, "password": "LearnerPass123!"})
+        learner = {"Authorization": f"Bearer {registration.json()['access_token']}"}
+        client.get("/research-runs", headers=learner)  # creates the app user
+        research_id = client.portal.call(research_run)
+        running_id = client.portal.call(research_run, "running")
+        assert client.post(f"/research-runs/{running_id}/courses", headers=learner).status_code == 409
+
+        first = client.post(f"/research-runs/{research_id}/courses", headers=learner)
+        assert first.status_code == 202, first.text
+        # TestClient runs background tasks before returning the response.
+        course = client.get(f"/courses/{first.json()['id']}", headers=learner).json()
+        second = client.post(f"/research-runs/{research_id}/courses", headers=learner).json()
+        versions = client.get(f"/research-runs/{research_id}/courses", headers=learner).json()
+        failed = client.get(f"/courses/{second['id']}", headers=learner).json()
+        listed = client.get("/research-runs", headers=learner).json()
+        assert client.post(f"/research-runs/{course['id']}/courses", headers=learner).status_code == 404
+        other = client.post("/auth/register", json={"email": f"o-{uuid4().hex}@example.com", "password": "LearnerPass123!"})
+        other_headers = {"Authorization": f"Bearer {other.json()['access_token']}"}
+        assert client.get(f"/courses/{course['id']}", headers=other_headers).status_code == 404
+
+    assert not script, "the agent stopped before finishing the script"
+    assert offered[0] == [
+        "check_course", "compact_conversation", "list_sources", "read_file",
+        "read_source", "search_sources", "set_outline", "write_section",
+    ]
+    assert "name: outline" in replies[1]
+    assert "Outline saved" in replies[3]
+    assert '"s1.p2"' in replies[4]
+    assert "Wrote c1-s1" in replies[5] and "Fact with no citation." in replies[5]
+    assert "Not in the cited source: 3." in replies[6]
+    assert '"c1-s2"' in replies[7] and '"lambdas"' in replies[7]
+    assert fetched == [[SOURCE_URL]], "sources are fetched once per research run"
+
+    assert course["status"] == "completed" and course["version"] == 1 and course["error"] is None
+    assert course["gaps"] == ["Section not written: Calling functions", "What is a lambda expression?"]
+    assert course["chapters"] == outline
+    assert course["sources"] == [{"id": "s1", "url": SOURCE_URL, "title": "Functions"}]
+    assert [[(s["kind"], s["warning"]) for s in paragraph] for paragraph in course["sections"]["c1-s1"]] == [
+        [("fact", None), ("fact", "Not in the cited source: 3.")],
+        [("explanation", None)],
+    ]
+    assert failed["status"] == "failed" and failed["error"] == "The course builder wrote no sections."
+    assert [(v["version"], v["status"]) for v in versions] == [(2, "failed"), (1, "completed")]
+    assert {run["id"] for run in listed} == {research_id, running_id}

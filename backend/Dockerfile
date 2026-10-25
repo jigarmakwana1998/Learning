@@ -86,13 +86,15 @@ RUN apt-get update \
     && chown -R app:app /home/app /opt/learning-tools /opt/agent-browser-cache \
     && rm -rf /var/lib/apt/lists/*
 
-# uv workspace: the API plus the database and browser-MCP packages, from the lock.
+# uv workspace: the API plus the database, browser-MCP and course-MCP packages, from the lock.
 COPY pyproject.toml uv.lock ./
 COPY backend/pyproject.toml ./backend/
 COPY backend/app ./backend/app
 COPY database ./database
 COPY mcp/browser/pyproject.toml ./mcp/browser/
 COPY mcp/browser/browser_mcp ./mcp/browser/browser_mcp
+COPY mcp/course/pyproject.toml ./mcp/course/
+COPY mcp/course/course_mcp ./mcp/course/course_mcp
 RUN pip install --no-cache-dir uv==0.11.7 \
     && uv sync --frozen --no-dev --no-editable --package learning-coach-api \
     && chown -R app:app /app

@@ -55,8 +55,10 @@ class BrowserGateway:
         max_pages: int | None = None,
         max_actions: int | None = None,
         max_elapsed_seconds: int | None = None,
+        page_characters: int = MAX_PAGE_CHARACTERS,
     ) -> None:
         settings = browser_settings()
+        self._page_characters = page_characters
         self.client = client or AgentBrowserClient()
         self._resolver = resolver
         self._clock = clock
@@ -265,7 +267,7 @@ class BrowserGateway:
             # v0.27.3 predates the `read` command; rendered body text is the
             # compatible, browser-backed extraction path for the pinned CLI.
             content_payload = results[5]
-            content = output_text(content_payload, "content", "text")[:MAX_PAGE_CHARACTERS]
+            content = output_text(content_payload, "content", "text")[: self._page_characters]
             if not content.strip():
                 raise AgentBrowserError("page did not expose readable text")
             return {
@@ -275,7 +277,7 @@ class BrowserGateway:
                 "title": output_text(title_payload, "title", "text")[:500],
                 "content": content,
                 "content_is_untrusted": True,
-                "truncated": len(output_text(content_payload, "content", "text")) > MAX_PAGE_CHARACTERS,
+                "truncated": len(output_text(content_payload, "content", "text")) > self._page_characters,
             }
         except Exception:
             await self.client.close(session, host)

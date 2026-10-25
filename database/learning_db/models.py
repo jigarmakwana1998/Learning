@@ -1,7 +1,7 @@
 from datetime import datetime, timezone
 from uuid import uuid4
 
-from sqlalchemy import DateTime, ForeignKey, Integer, JSON, String, Text
+from sqlalchemy import DateTime, ForeignKey, Integer, JSON, String, Text, UniqueConstraint
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
 
@@ -102,3 +102,29 @@ class AgentTraceEvent(Base):
     completion_tokens: Mapped[int | None] = mapped_column(Integer, nullable=True)
     total_cost_usd: Mapped[float | None] = mapped_column(nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now, index=True)
+
+
+class SourcePage(Base):
+    """The full text of a researched page, fetched once so every course version cites the same text."""
+
+    __tablename__ = "source_pages"
+    __table_args__ = (UniqueConstraint("research_run_id", "position"),)
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid4()))
+    research_run_id: Mapped[str] = mapped_column(ForeignKey("agent_runs.id"), index=True)
+    position: Mapped[int] = mapped_column(Integer)
+    url: Mapped[str] = mapped_column(Text)
+    title: Mapped[str] = mapped_column(Text)
+    text: Mapped[str] = mapped_column(Text)
+    fetched_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
+
+
+class Course(Base):
+    """One course version; its id is the agent run that builds it, which holds status, error and gaps."""
+
+    __tablename__ = "courses"
+    __table_args__ = (UniqueConstraint("research_run_id", "version"),)
+    id: Mapped[str] = mapped_column(ForeignKey("agent_runs.id"), primary_key=True)
+    research_run_id: Mapped[str] = mapped_column(ForeignKey("agent_runs.id"), index=True)
+    version: Mapped[int] = mapped_column(Integer)
+    chapters: Mapped[list] = mapped_column(JSON, default=list)
+    sections: Mapped[dict] = mapped_column(JSON, default=dict)
