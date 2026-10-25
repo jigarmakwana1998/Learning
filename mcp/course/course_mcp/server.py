@@ -114,46 +114,29 @@ async def search_sources(query: str, limit: int = 8) -> dict:
 
 @mcp.tool()
 async def set_outline(chapters: list[Chapter]) -> str:
-    """Set the course's chapters and sections. Replaces the outline; sections not in it are dropped."""
-    lib = await library()
-    ids = [section.id for chapter in chapters for section in chapter.sections]
-    if len(ids) != len(set(ids)):
-        return "Not saved: section ids must be unique."
-    known = {item["id"] for item in lib.coverage}
-    if unknown := sorted({c for ch in chapters for s in ch.sections for c in s.covers} - known):
-        return f"Not saved: unknown coverage ids {unknown}. Use ids from list_sources."
-    sourced = {item for source in lib.sources for item in source["covers"]}
-    planned = {c for ch in chapters for s in ch.sections for c in s.covers}
-    if missing := sorted((sourced & known) - planned):
-        return f"Not saved: coverage items {missing} have sources but no section teaches them."
+    """Set the course's chapters and sections. Replaces the outline; sections already written are kept by id."""
     async with SessionLocal() as db:
         course = await db.get(Course, os.environ["COURSE_ID"])
         course.chapters = [chapter.model_dump() for chapter in chapters]
-        course.sections = {key: value for key, value in course.sections.items() if key in ids}
         await db.commit()
-    return f"Outline saved: {len(chapters)} chapters, {len(ids)} sections."
+    return f"Outline saved: {len(chapters)} chapters, {sum(len(c.sections) for c in chapters)} sections."
 
 
 @mcp.tool()
 async def write_section(section_id: str, paragraphs: list[Paragraph]) -> str:
     """Write or replace one outlined section. Every fact sentence cites a passage with an exact quote."""
     lib = await library()
+    written = review(paragraphs, lib.passages.get)
     async with SessionLocal() as db:
         course = await db.get(Course, os.environ["COURSE_ID"])
         outlined = {section.id for chapter in course.chapters for section in Chapter(**chapter).sections}
-        if section_id not in outlined:
-            return f"Not written: {section_id} is not in the outline. Call set_outline first or use its ids."
-        if not paragraphs:
-            return "Not written: a section needs at least one paragraph."
-        problems, written = review(paragraphs, lib.passages.get)
-        if problems:
-            return "Not written:\n- " + "\n- ".join(problems[:10])
         course.sections = {**course.sections, section_id: [[s.model_dump() for s in p] for p in written]}
         await db.commit()
-    warnings = [s.warning for p in written for s in p if s.warning]
     reply = f"Wrote {section_id}: {sum(len(p) for p in written)} sentences."
-    if warnings:
-        reply += " Warnings, shown to the learner until fixed:\n- " + "\n- ".join(warnings)
+    if section_id not in outlined:
+        reply += f" {section_id} is not in the outline, so the learner will not see it; use an outline id."
+    if warnings := [f"paragraph {i} sentence {j}: {s.warning}" for i, p in enumerate(written, 1) for j, s in enumerate(p, 1) if s.warning]:
+        reply += " Warnings, highlighted for the learner until you fix them:\n- " + "\n- ".join(warnings)
     return reply
 
 

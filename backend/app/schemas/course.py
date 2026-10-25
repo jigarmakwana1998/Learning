@@ -23,7 +23,7 @@ class CourseView(CourseVersion):
     topic: str
     error: str | None = None
     activity: str | None = None
-    gaps: list[str] = Field(default_factory=list, description="Coverage questions no written section teaches.")
+    gaps: list[str] = Field(default_factory=list, description="Sections not written, then coverage questions no written section teaches.")
     chapters: list[Chapter] = Field(default_factory=list)
     sections: dict[str, list[list[WrittenSentence]]] = Field(default_factory=dict)
     sources: list[CourseSource] = Field(default_factory=list)

@@ -66,8 +66,11 @@ class CourseService:
             if not course.sections:
                 raise ValueError("The course builder wrote no sections.")
             coverage = research.result["coverage"]
-            untaught = check([Chapter(**c) for c in course.chapters], course.sections, [c["id"] for c in coverage])
-            gaps = [item["question"] for item in coverage if item["id"] in untaught["untaught"]]
+            chapters = [Chapter(**c) for c in course.chapters]
+            left = check(chapters, course.sections, [c["id"] for c in coverage])
+            titles = {s.id: s.title or s.id for chapter in chapters for s in chapter.sections}
+            gaps = [f"Section not written: {titles[s]}" for s in left["unwritten"]]
+            gaps += [item["question"] for item in coverage if item["id"] in left["untaught"]]
             error = None
         except (RuntimeError, ValueError) as failure:
             error = str(failure)

@@ -204,6 +204,7 @@ def test_course_builder_writes_cited_versions_through_the_course_mcp_server(monk
 
     outline = [{"id": "c1", "title": "Defining functions", "sections": [
         {"id": "c1-s1", "title": "The def statement", "covers": ["basics"]},
+        {"id": "c1-s2", "title": "Calling functions", "covers": ["basics"]},
     ]}]
     script[:] = [
         _call("read_file", {"file_path": "/skills/outline/SKILL.md", "limit": 1000}),
@@ -273,13 +274,13 @@ def test_course_builder_writes_cited_versions_through_the_course_mcp_server(monk
     assert "name: outline" in replies[1]
     assert "Outline saved" in replies[3]
     assert '"s1.p2"' in replies[4]
-    assert "is a fact with no citation" in replies[5]
+    assert "Wrote c1-s1" in replies[5] and "Fact with no citation." in replies[5]
     assert "Not in the cited source: 3." in replies[6]
-    assert '"lambdas"' in replies[7]
+    assert '"c1-s2"' in replies[7] and '"lambdas"' in replies[7]
     assert fetched == [[SOURCE_URL]], "sources are fetched once per research run"
 
     assert course["status"] == "completed" and course["version"] == 1 and course["error"] is None
-    assert course["gaps"] == ["What is a lambda expression?"]
+    assert course["gaps"] == ["Section not written: Calling functions", "What is a lambda expression?"]
     assert course["chapters"] == outline
     assert course["sources"] == [{"id": "s1", "url": SOURCE_URL, "title": "Functions"}]
     sentences = course["sections"]["c1-s1"][0]

@@ -101,9 +101,10 @@ The first build fetches the full text of the run's saved pages once into
 Agent works through the course MCP server: `list_sources`, `read_source` and
 `search_sources` return numbered passages (`s2.p7`), `set_outline` sets chapters
 and sections, `write_section` writes one section, and `check_course` lists what is
-left. Every `fact` sentence must cite a passage with a quote that appears in it
-verbatim, or the section is rejected; `explanation` sentences need no citation. A
-number missing from a sentence's quotes is saved with a warning for the learner.
+left. Every `fact` sentence should cite a passage with a quote that appears in it
+verbatim; `explanation` sentences need no citation. Nothing is rejected: a missing
+citation, a quote not found in its passage, or a number missing from a sentence's
+quotes is saved with a warning that the learner sees highlighted.
 Its skills are in `backend/app/skills/course/` (`outline`, `write`, `review`).
 
 LiteLLM is the mandatory model gateway: changing the `agent-model` mapping in

@@ -1,8 +1,8 @@
-"""Course content the agent writes, and the citation rules write_section enforces."""
+"""Course content the agent writes, and the citation warnings write_section attaches to it."""
 
 import re
 from collections.abc import Callable
-from typing import Annotated, Literal
+from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -11,20 +11,21 @@ _QUOTES = str.maketrans({"‘": "'", "’": "'", "“": '"', "”": '"'})
 
 
 class AgentOutput(BaseModel):
-    # Whitespace-only strings must not satisfy a minimum length.
+    # No length or format constraints: whatever the agent writes is saved and shown; citation problems become warnings.
     model_config = ConfigDict(str_strip_whitespace=True)
 
 
 class Cite(AgentOutput):
-    passage: str = Field(pattern=r"^s\d+\.p\d+$", description="Passage id from read_source or search_sources, e.g. s2.p7.")
-    quote: str = Field(min_length=8, description="Words copied exactly from that passage that state the fact.")
+    passage: str = Field(description="One passage id from read_source or search_sources, e.g. s2.p7.")
+    quote: str = Field(description="Text copied exactly from that one passage that states the fact.")
 
 
 class Sentence(AgentOutput):
-    text: str = Field(min_length=2)
+    text: str
     kind: Literal["fact", "explanation"] = Field(
+        default="fact",
         description="fact: anything a source must back (a definition, how something works, a number, name or date). "
-        "explanation: connecting or teaching text that states no new fact."
+        "explanation: connecting or teaching text that states no new fact.",
     )
     cites: list[Cite] = Field(default_factory=list, description="At least one for a fact.")
 
@@ -34,18 +35,18 @@ class WrittenSentence(Sentence):
 
 
 class OutlineSection(AgentOutput):
-    id: str = Field(min_length=1)
-    title: str = Field(min_length=2)
-    covers: list[str] = Field(min_length=1, description="Ids of the coverage items this section teaches.")
+    id: str
+    title: str = ""
+    covers: list[str] = Field(default_factory=list, description="Ids of the coverage items this section teaches.")
 
 
 class Chapter(AgentOutput):
-    id: str = Field(min_length=1)
-    title: str = Field(min_length=2)
-    sections: list[OutlineSection] = Field(min_length=1)
+    id: str
+    title: str = ""
+    sections: list[OutlineSection] = Field(default_factory=list)
 
 
-Paragraph = Annotated[list[Sentence], Field(min_length=1)]
+Paragraph = list[Sentence]
 
 
 def passages(text: str) -> list[str]:
@@ -54,43 +55,33 @@ def passages(text: str) -> list[str]:
 
 
 def _normal(text: str) -> str:
-    return " ".join(text.translate(_QUOTES).split()).casefold()
+    # Models often double-escape backslashes in JSON, so a formula quote arrives with \\ where the page has \.
+    return " ".join(text.replace("\\\\", "\\").translate(_QUOTES).split()).casefold()
 
 
-def review(
-    paragraphs: list[list[Sentence]], passage_text: Callable[[str], str | None]
-) -> tuple[list[str], list[list[WrittenSentence]]]:
-    """Problems that reject the section, and the sentences to save with any number warnings."""
-    problems: list[str] = []
-    written: list[list[WrittenSentence]] = []
-    for p, paragraph in enumerate(paragraphs, 1):
-        written.append([])
-        for s, sentence in enumerate(paragraph, 1):
-            where = f"paragraph {p} sentence {s}"
-            if sentence.kind == "fact" and not sentence.cites:
-                problems.append(f"{where} is a fact with no citation.")
-            quotes = []
-            for cite in sentence.cites:
-                text = passage_text(cite.passage)
-                if text is None:
-                    problems.append(f"{where}: unknown passage {cite.passage}.")
-                elif _normal(cite.quote) not in _normal(text):
-                    problems.append(f"{where}: the quote is not in {cite.passage}; copy its words exactly.")
-                else:
-                    quotes.append(cite.quote)
-            written[-1].append(WrittenSentence(**sentence.model_dump(), warning=_number_warning(sentence, quotes)))
-    return problems, written
+def review(paragraphs: list[list[Sentence]], passage_text: Callable[[str], str | None]) -> list[list[WrittenSentence]]:
+    """Every sentence is saved; citation problems become a warning the learner sees."""
+    return [[_written(sentence, passage_text) for sentence in paragraph] for paragraph in paragraphs]
 
 
-def _number_warning(sentence: Sentence, quotes: list[str]) -> str | None:
+def _written(sentence: Sentence, passage_text: Callable[[str], str | None]) -> WrittenSentence:
+    warnings, quotes = [], []
+    if sentence.kind == "fact" and not sentence.cites:
+        warnings.append("Fact with no citation.")
+    for cite in sentence.cites:
+        text = passage_text(cite.passage)
+        if text is None:
+            warnings.append(f"Unknown passage {cite.passage}.")
+        elif _normal(cite.quote) not in _normal(text):
+            warnings.append(f"Quote not found in {cite.passage}.")
+        else:
+            quotes.append(cite.quote)
     numbers = NUMBER.findall(sentence.text)
-    if not numbers:
-        return None
-    if not sentence.cites:
-        return f"Uncited number {', '.join(numbers)}: a number is a fact; cite it."
-    quoted = set(NUMBER.findall(" ".join(quotes)))
-    missing = [number for number in numbers if number not in quoted]
-    return f"Not in the cited source: {', '.join(missing)}." if missing else None
+    if numbers and not sentence.cites and sentence.kind == "explanation":
+        warnings.append(f"Uncited number {', '.join(numbers)}.")
+    elif missing := [n for n in numbers if quotes and n not in set(NUMBER.findall(" ".join(quotes)))]:
+        warnings.append(f"Not in the cited source: {', '.join(missing)}.")
+    return WrittenSentence(**sentence.model_dump(), warning=" ".join(warnings) or None)
 
 
 def check(chapters: list[Chapter], sections: dict, coverage_ids: list[str]) -> dict:
