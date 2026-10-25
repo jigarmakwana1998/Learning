@@ -5,13 +5,13 @@ description: Check that every quote supports its sentence, fix warnings and fini
 # Review the course
 
 1. For each written section, re-read the cited passages. A quote must state
-   the fact in its sentence, not just share a word with it. Rewrite the
-   section with `write_section`, dropping or correcting any sentence its
-   quote does not support.
+   every part of the fact in its sentence, not just share a topic with it.
+   If it does not, cite a passage that does, reword the sentence to say only
+   what the quote says, or drop it. Save the section again with
+   `write_section`.
 2. Call `check_course`:
    - `unwritten`: write those sections.
    - `untaught`: search the sources once more for those items; if nothing
      supports them, leave them as gaps.
-   - `warnings`: fix each one by quoting the passage with the number, or
-     removing the number.
+   - `warnings`: fix each one as the write skill describes.
 3. Stop when `check_course` shows nothing left that the sources can support.

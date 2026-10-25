@@ -18,13 +18,22 @@ description: Write one section as a descriptive, cited lesson from the source pa
    the exact term the source uses over a vague one.
 5. Write every sentence as its own item:
    - `fact`: any definition, statement of how something works, number, name,
-     date, version or behaviour. It needs `cites`: the passage id and a
-     `quote` copied word for word from that passage that states the fact.
+     date, version or behaviour. It needs `cites`.
    - `explanation`: a transition or framing that states no new fact, such as
      "Next, we look at how this is used." It needs no citation.
    When in doubt, it is a fact.
-6. Write only what the passages say. If a coverage item has no supporting
+6. A citation is one passage id and a `quote` from that passage:
+   - Copy the quote character for character from the passage text as
+     `read_source` or `search_sources` returned it. Do not change, add or
+     drop a single word, and do not add labels such as "Note:".
+   - A passage is one line. The quote must come from that one passage; to
+     use words from two passages, give two citations.
+   - A short quote is fine: copy just the words that state the fact.
+   - Copy formulas and code exactly as shown, with the same symbols.
+7. Write only what the passages say. If a coverage item has no supporting
    passage, leave it out; check_course reports it as a gap.
-7. Call `write_section`. If it replies "Not written", fix each listed problem
-   and call it again. Fix any number warning by quoting the passage that
-   contains the number, or remove the number.
+8. Call `write_section` with the section id from the outline. It saves
+   everything and lists warnings, which the learner sees highlighted. Fix
+   each warning by correcting the quote or citation, or rewording the
+   sentence to say only what the quote says, and call `write_section` again
+   for that section.
