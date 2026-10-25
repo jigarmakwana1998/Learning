@@ -28,6 +28,9 @@ class Sentence(AgentOutput):
         "explanation: connecting or teaching text that states no new fact.",
     )
     cites: list[Cite] = Field(default_factory=list, description="At least one for a fact.")
+    paragraph: int = Field(
+        default=1, description="Paragraph number in the section, from 1; sentences with the same number form a paragraph."
+    )
 
 
 class WrittenSentence(Sentence):
@@ -46,7 +49,12 @@ class Chapter(AgentOutput):
     sections: list[OutlineSection] = Field(default_factory=list)
 
 
-Paragraph = list[Sentence]
+def paragraphs(sentences: list[Sentence]) -> list[list[Sentence]]:
+    """Group a section's sentences into paragraphs by their paragraph number, keeping their order."""
+    grouped: dict[int, list[Sentence]] = {}
+    for sentence in sentences:
+        grouped.setdefault(sentence.paragraph, []).append(sentence)
+    return [grouped[number] for number in sorted(grouped)]
 
 
 def passages(text: str) -> list[str]:

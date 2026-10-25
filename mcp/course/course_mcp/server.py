@@ -16,7 +16,7 @@ from sqlalchemy import select
 from learning_db.models import AgentRun, Course, LearningRequest, SourcePage
 from learning_db.session import SessionLocal
 
-from .course import Chapter, Paragraph, check, passages, review
+from .course import Chapter, Sentence, check, paragraphs, passages, review
 
 READ_CHARACTERS = 6000
 
@@ -123,10 +123,10 @@ async def set_outline(chapters: list[Chapter]) -> str:
 
 
 @mcp.tool()
-async def write_section(section_id: str, paragraphs: list[Paragraph]) -> str:
-    """Write or replace one outlined section. Every fact sentence cites a passage with an exact quote."""
+async def write_section(section_id: str, sentences: list[Sentence]) -> str:
+    """Write or replace one outlined section as a flat list of sentences, each with its paragraph number."""
     lib = await library()
-    written = review(paragraphs, lib.passages.get)
+    written = review(paragraphs(sentences), lib.passages.get)
     async with SessionLocal() as db:
         course = await db.get(Course, os.environ["COURSE_ID"])
         outlined = {section.id for chapter in course.chapters for section in Chapter(**chapter).sections}
