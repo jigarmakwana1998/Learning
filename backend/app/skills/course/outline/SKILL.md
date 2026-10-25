@@ -5,9 +5,10 @@ description: Plan the course's chapters and sections from the goal, coverage ite
 # Outline the course
 
 1. Call `list_sources` for the goal, the coverage items and the sources.
-2. Size the course to the total hours and level: a short goal gets a few
-   focused chapters, a long one gets more chapters with more sections each.
-   Plan only what the sources can teach.
+2. Size the course to the total hours and level: plan about one section for
+   every 1 to 2 hours of study, so a 3-hour goal gets 2 or 3 sections and a
+   20-hour goal gets 10 to 20. Split a broad topic into several sections
+   rather than covering it in one. Plan only what the sources can teach.
 3. Order chapters so prerequisites come first. Each section has one learning
    goal and lists the coverage ids from `list_sources` it teaches in `covers`.
 4. Every coverage item that has a source must be taught by some section.
