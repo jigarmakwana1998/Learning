@@ -211,12 +211,13 @@ def test_course_builder_writes_cited_versions_through_the_course_mcp_server(monk
         _call("list_sources", {}),
         _call("set_outline", {"chapters": outline}),
         _call("read_source", {"source_id": "s1"}),
-        _call("write_section", {"section_id": "c1-s1", "paragraphs": [[_sentence("A def statement names a function.")]]}),
-        _call("write_section", {"section_id": "c1-s1", "paragraphs": [[
+        _call("write_section", {"section_id": "c1-s1", "sentences": [_sentence("A def statement names a function.")]}),
+        # Sentences arrive as one flat list; their paragraph numbers group them.
+        _call("write_section", {"section_id": "c1-s1", "sentences": [
             _sentence("A def statement binds a name to a function object.", quote="A def statement binds a name to a function object."),
-            _sentence("Next, we look at the body.", "explanation"),
+            {**_sentence("Next, we look at the body.", "explanation"), "paragraph": 2},
             _sentence("Python 3 kept the def statement.", quote="A def statement binds a name"),
-        ]]}),
+        ]}),
         _call("check_course", {}),
         AIMessage(content="Wrote one cited section."),
         # Version 2 writes nothing and fails, but version 1 is kept.
@@ -283,9 +284,9 @@ def test_course_builder_writes_cited_versions_through_the_course_mcp_server(monk
     assert course["gaps"] == ["Section not written: Calling functions", "What is a lambda expression?"]
     assert course["chapters"] == outline
     assert course["sources"] == [{"id": "s1", "url": SOURCE_URL, "title": "Functions"}]
-    sentences = course["sections"]["c1-s1"][0]
-    assert [(s["kind"], s["warning"]) for s in sentences] == [
-        ("fact", None), ("explanation", None), ("fact", "Not in the cited source: 3."),
+    assert [[(s["kind"], s["warning"]) for s in paragraph] for paragraph in course["sections"]["c1-s1"]] == [
+        [("fact", None), ("fact", "Not in the cited source: 3.")],
+        [("explanation", None)],
     ]
     assert failed["status"] == "failed" and failed["error"] == "The course builder wrote no sections."
     assert [(v["version"], v["status"]) for v in versions] == [(2, "failed"), (1, "completed")]

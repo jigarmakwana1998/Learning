@@ -36,8 +36,11 @@ description: Write one section as a descriptive, cited lesson from the source pa
    - Copy formulas and code exactly as shown, with the same symbols.
 8. Write only what the passages say. If a coverage item has no supporting
    passage, leave it out; check_course reports it as a gap.
-9. Call `write_section` with the section id from the outline. It saves
-   everything and lists warnings, which the learner sees highlighted. Fix
+9. Call `write_section` with the section id from the outline and all its
+   sentences in order, as one flat list. Give each sentence its `paragraph`
+   number (1, 2, 3, ...); sentences with the same number form a paragraph.
+   It saves everything and lists warnings, which the learner sees
+   highlighted. Fix
    each warning by correcting the quote or citation, or rewording the
    sentence to say only what the quote says, and call `write_section` again
    for that section.
