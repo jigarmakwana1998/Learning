@@ -22,7 +22,7 @@ jobs:
           # Semgrep 1.136 imports pkg_resources, removed from setuptools 81+.
           python -m pip install "setuptools<81" "semgrep==1.136.0" "bandit==1.8.3" "pip-audit==2.9.0" "uv==0.11.7"
           semgrep scan --config p/python --config .semgrep/agent-boundaries.yml --error
-          bandit --recursive backend/app database/learning_db mcp/browser/browser_mcp --severity-level medium --confidence-level medium
+          bandit --recursive backend/app database/learning_db mcp/browser/browser_mcp mcp/course/course_mcp --severity-level medium --confidence-level medium
           uv export --frozen --no-dev --no-emit-workspace --no-hashes --output-file /tmp/requirements.txt
           pip-audit --requirement /tmp/requirements.txt
       - name: Gitleaks current revision
@@ -42,7 +42,7 @@ jobs:
         env:
           POSTGRES_PASSWORD: ci-postgres-password
           LITELLM_MASTER_KEY: sk-ci
-          NVIDIA_API_KEY: ci-nvidia-key
+          OPENAI_API_KEY: ci-openai-key
           SEARXNG_SECRET: ci-searxng-secret
         run: |
           cp backend/.env.example backend/.env

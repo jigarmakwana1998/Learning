@@ -13,7 +13,7 @@ from langchain_mcp_adapters.tools import load_mcp_tools
 from app.schemas.learning import CoverageItem, LearningGoal, SavedPage
 
 NAME = "Researcher"
-SKILLS_DIR = Path(__file__).resolve().parents[1] / "skills"
+SKILLS_DIR = Path(__file__).resolve().parents[1] / "skills" / "research"
 
 SYSTEM_PROMPT = (
     "You are the Researcher in an evidence-grounded learning app. Find the public web pages a learner should study "
