@@ -5,6 +5,7 @@ import { useMutation, useQuery } from "@tanstack/react-query";
 import { AlertTriangle, BookOpenCheck } from "lucide-react";
 import { AppShell } from "@/components/app-shell";
 import { AuthPanel } from "@/components/auth-panel";
+import { CoursePanel } from "@/components/course-panel";
 import { IntakeForm } from "@/components/intake-form";
 import { ResearchResults } from "@/components/research-results";
 import { Button } from "@/components/ui/button";
@@ -35,6 +36,7 @@ export default function Home() {
       <IntakeForm onSubmit={generation.mutate} pending={generation.isPending} />
       {run.data?.status === "failed" && <p role="alert" className="rounded-xl border border-red-200 bg-red-50 p-4 text-red-800 dark:border-red-900 dark:bg-red-950 dark:text-red-200">{run.data.error ?? "Research failed. Please try again."}</p>}
       {run.data && <ResearchResults run={run.data} />}
+      {run.data?.status === "completed" && <CoursePanel researchRunId={run.data.id} token={token} />}
     </div>
   </AppShell>;
 }
