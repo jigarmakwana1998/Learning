@@ -1,16 +1,15 @@
 """The single research agent: browser MCP tools, skills, and two tools that publish progress."""
 
 import os
-import sys
-from collections.abc import AsyncIterator, Callable
-from contextlib import asynccontextmanager
+from collections.abc import Callable
+from contextlib import AbstractAsyncContextManager
 from pathlib import Path
 
 from langchain_core.tools import BaseTool, StructuredTool
-from langchain_mcp_adapters.client import MultiServerMCPClient
-from langchain_mcp_adapters.tools import load_mcp_tools
 
 from app.schemas.learning import CoverageItem, LearningGoal, SavedPage
+
+from .mcp_tools import server_tools
 
 NAME = "Researcher"
 SKILLS_DIR = Path(__file__).resolve().parents[1] / "skills" / "research"
@@ -61,17 +60,6 @@ def progress_tools(
     ]
 
 
-@asynccontextmanager
-async def browser_tools() -> AsyncIterator[list[BaseTool]]:
+def browser_tools() -> AbstractAsyncContextManager[list[BaseTool]]:
     """One browser MCP server process per run, so its budgets apply to the whole run."""
-    client = MultiServerMCPClient({
-        "browser": {
-            "transport": "stdio",
-            "command": sys.executable,
-            "args": ["-m", "browser_mcp.server"],
-            # The server reads SEARXNG_URL, RESEARCH_MAX_* and AGENT_BROWSER_COMMAND.
-            "env": dict(os.environ),
-        }
-    })
-    async with client.session("browser") as session:
-        yield await load_mcp_tools(session)
+    return server_tools("browser_mcp.server", dict(os.environ))

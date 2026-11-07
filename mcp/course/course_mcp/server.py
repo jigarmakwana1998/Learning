@@ -10,7 +10,7 @@ import os
 import re
 from dataclasses import dataclass
 
-from mcp.server.fastmcp import FastMCP
+from mcp.server import MCPServer
 from sqlalchemy import select
 
 from learning_db.models import AgentRun, Course, LearningRequest, SourcePage
@@ -20,7 +20,7 @@ from .course import Chapter, Sentence, check, paragraphs, passages, review
 
 READ_CHARACTERS = 6000
 
-mcp = FastMCP("learning-course")
+mcp = MCPServer("learning-course")
 
 
 @dataclass

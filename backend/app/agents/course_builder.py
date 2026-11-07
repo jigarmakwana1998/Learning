@@ -1,18 +1,16 @@
 """The course agent: writes a cited course from a research run's pages through the course MCP server."""
 
 import os
-import sys
-from collections.abc import AsyncIterator
-from contextlib import asynccontextmanager
+from contextlib import AbstractAsyncContextManager
 from pathlib import Path
 
 from langchain_core.tools import BaseTool
-from langchain_mcp_adapters.client import MultiServerMCPClient
-from langchain_mcp_adapters.tools import load_mcp_tools
 
 from app.schemas.learning import LearningGoal
 from browser_mcp.client import AgentBrowserClient
 from browser_mcp.gateway import MAX_URLS_PER_READ, BrowserGateway
+
+from .mcp_tools import server_tools
 
 NAME = "CourseBuilder"
 SKILLS_DIR = Path(__file__).resolve().parents[1] / "skills" / "course"
@@ -40,20 +38,9 @@ def task(goal: LearningGoal) -> str:
     )
 
 
-@asynccontextmanager
-async def course_tools(course_id: str) -> AsyncIterator[list[BaseTool]]:
+def course_tools(course_id: str) -> AbstractAsyncContextManager[list[BaseTool]]:
     """One course MCP server process per build, bound to that course."""
-    client = MultiServerMCPClient({
-        "course": {
-            "transport": "stdio",
-            "command": sys.executable,
-            "args": ["-m", "course_mcp.server"],
-            # The server reads DATABASE_URL and COURSE_ID.
-            "env": {**os.environ, "COURSE_ID": course_id},
-        }
-    })
-    async with client.session("course") as session:
-        yield await load_mcp_tools(session)
+    return server_tools("course_mcp.server", {**os.environ, "COURSE_ID": course_id})
 
 
 async def read_pages(urls: list[str]) -> dict[str, str]:

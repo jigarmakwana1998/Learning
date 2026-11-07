@@ -5,8 +5,7 @@ description = "Course MCP server: a research run's source pages, the course outl
 requires-python = ">=3.12"
 dependencies = [
     "learning-coach-db",
-    # The server is written against the FastMCP 1.x API (mcp.server.fastmcp).
-    "mcp>=1.28.1,<2",
+    "mcp>=2.3,<3",
     "pydantic>=2.12,<3",
     "sqlalchemy[asyncio]>=2.0,<3",
 ]

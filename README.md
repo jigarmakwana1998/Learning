@@ -67,7 +67,7 @@ application creates a session-scoped LiteLLM key for every agent run.
 
 ## Start the mobile app
 
-Install Node.js 20+ first, then:
+Install Node.js 22.13+ (CI uses 22.19.0) first, then:
 
 ```bash
 cd mobile
@@ -75,7 +75,12 @@ npm install
 npx expo start
 ```
 
-Press `w` for the web app, `i` for iOS simulator, or `a` for Android emulator. Expo Go can be used for a physical device.
+The mobile app uses Expo SDK 58, pinned to 58.0.22 (released October 31, 2026;
+at least seven days old when selected). Router, React Native, and native modules
+are aligned with that SDK. Use an SDK 58-compatible Expo Go or development build.
+SDK 58 requires iOS 16.4+ and Android 7+; rebuilding a development client is
+required after this native dependency upgrade. Press `w` for web, `i` for the iOS
+simulator, or `a` for the Android emulator. Web export remains static.
 
 Copy `mobile/.env.example` to `mobile/.env`. For an iOS/Android device, set `EXPO_PUBLIC_API_URL` to your computer's LAN address, for example `http://192.168.1.10:8000`.
 
@@ -110,6 +115,9 @@ Its skills are in `backend/app/skills/course/` (`outline`, `write`, `review`).
 LiteLLM is the mandatory model gateway: changing the `agent-model` mapping in
 `infra/litellm/config.yaml` swaps the model without changing agent code. Durable
 checkpoints use PostgreSQL in Compose and SQLite locally.
+
+Browser and course tools use the official MCP 2.x client and `MCPServer`. The LangChain MCP
+adapter was removed because its published releases still require MCP 1.x.
 
 ### Agent observability
 

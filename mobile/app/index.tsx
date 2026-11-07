@@ -4,13 +4,13 @@ import {
   Alert,
   Linking,
   Pressable,
-  SafeAreaView,
   ScrollView,
   StyleSheet,
   Text,
   TextInput,
   View,
 } from "react-native";
+import { SafeAreaView } from "react-native-safe-area-context";
 
 import { buildCourse, Course, CourseVersion, getCourse, getCourseVersions, getMe, getResearchRun, login, logout, register, ResearchRun, Sentence, startResearchRun, User } from "@/lib/api";
 
