@@ -15,7 +15,7 @@ dependencies = [
     "langgraph-checkpoint-postgres>=3,<4",
     "langgraph-checkpoint-sqlite>=3,<4",
     "learning-coach-db",
-    "litellm[mcp]>=1.106.2,<1.107",
+    "litellm[mcp]>=1.106.2,<1.109",
     "pydantic>=2.12,<3",
     "python-dotenv>=1,<2",
     "sqlalchemy[asyncio]>=2.0,<3",
