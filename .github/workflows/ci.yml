@@ -4,7 +4,6 @@ on:
   pull_request:
   push:
     branches: [main]
-  workflow_dispatch:
 
 permissions:
   contents: read
@@ -13,6 +12,11 @@ jobs:
   backend:
     name: Backend lint and tests
     runs-on: ubuntu-24.04
+    env:
+      # Real project for the live auth contract tests; the rest of the suite uses a fake.
+      SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+      SUPABASE_PUBLISHABLE_KEY: ${{ secrets.SUPABASE_PUBLISHABLE_KEY }}
+      SUPABASE_SECRET_KEY: ${{ secrets.SUPABASE_SECRET_KEY }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
@@ -25,25 +29,10 @@ jobs:
       - run: uv run ruff check backend database mcp --ignore E501,E701,E702,B008,I001,UP017
       # The SQLite-backed tests share one database file; running them in
       # parallel races application startup and table creation.
-      - run: uv run pytest --testmon -q --benchmark-disable --ignore=backend/tests/test_supabase_live.py --cov=app --cov=learning_db --cov=browser_mcp --cov=course_mcp --cov-report=xml:coverage.xml
+      - run: uv run pytest --testmon -q --benchmark-disable --cov=app --cov=learning_db --cov=browser_mcp --cov=course_mcp --cov-report=xml:coverage.xml
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         if: always()
         with: { name: backend-coverage, path: coverage.xml, if-no-files-found: warn }
-  live-auth:
-    name: Live Supabase auth
-    if: github.event_name != 'pull_request' || (github.actor != 'dependabot[bot]' && github.event.pull_request.head.repo.full_name == github.repository)
-    runs-on: ubuntu-24.04
-    env:
-      SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
-      SUPABASE_PUBLISHABLE_KEY: ${{ secrets.SUPABASE_PUBLISHABLE_KEY }}
-      SUPABASE_SECRET_KEY: ${{ secrets.SUPABASE_SECRET_KEY }}
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
-        with: { python-version: "3.12" }
-      - run: python -m pip install uv==0.11.7
-      - run: uv sync --frozen
-      - run: uv run pytest backend/tests/test_supabase_live.py -q --benchmark-disable
   mobile:
     name: Mobile type check
     runs-on: ubuntu-24.04
