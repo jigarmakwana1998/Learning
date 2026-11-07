@@ -12,6 +12,7 @@ backend/.pytest-*/
 backend/.test-*/
 learning_live_smoke.db
 node_modules/
+/mobile/dist/
 .local-*.log
 
 %SystemDrive%/

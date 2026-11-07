@@ -24,7 +24,8 @@ jobs:
           semgrep scan --config p/python --config .semgrep/agent-boundaries.yml --error
           bandit --recursive backend/app database/learning_db mcp/browser/browser_mcp --severity-level medium --confidence-level medium
           uv export --frozen --no-dev --no-emit-workspace --no-hashes --output-file /tmp/requirements.txt
-          pip-audit --requirement /tmp/requirements.txt
+          # Audit uv's complete locked tree, including its security overrides, without re-resolving it.
+          pip-audit --no-deps --disable-pip --requirement /tmp/requirements.txt
       - name: Gitleaks current revision
         uses: gitleaks/gitleaks-action@e0c47f4f8be36e29cdc102c57e68cb5cbf0e8d1e # v3.0.0
         env:

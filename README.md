@@ -67,7 +67,7 @@ application creates a session-scoped LiteLLM key for every agent run.
 
 ## Start the mobile app
 
-Install Node.js 20+ first, then:
+Install Node.js 22.13+ (CI uses 22.19.0) first, then:
 
 ```bash
 cd mobile
@@ -75,7 +75,12 @@ npm install
 npx expo start
 ```
 
-Press `w` for the web app, `i` for iOS simulator, or `a` for Android emulator. Expo Go can be used for a physical device.
+The mobile app uses Expo SDK 58, pinned to 58.0.22 (released October 31, 2026;
+at least seven days old when selected). Router, React Native, and native modules
+are aligned with that SDK. Use an SDK 58-compatible Expo Go or development build.
+SDK 58 requires iOS 16.4+ and Android 7+; rebuilding a development client is
+required after this native dependency upgrade. Press `w` for web, `i` for the iOS
+simulator, or `a` for the Android emulator. Web export remains static.
 
 Copy `mobile/.env.example` to `mobile/.env`. For an iOS/Android device, set `EXPO_PUBLIC_API_URL` to your computer's LAN address, for example `http://192.168.1.10:8000`.
 
@@ -96,6 +101,9 @@ demand with `read_file`; the `task` subagent is disabled. The course length
 LiteLLM is the mandatory model gateway: changing the `agent-model` mapping in
 `infra/litellm/config.yaml` swaps the model without changing agent code. Durable
 checkpoints use PostgreSQL in Compose and SQLite locally.
+
+Browser tools use the official MCP 2.x client and `MCPServer`. The LangChain MCP
+adapter was removed because its published releases still require MCP 1.x.
 
 ### Agent observability
 
@@ -126,7 +134,7 @@ backend/app/
 
 - `POST /auth/register`, `POST /auth/login`, and `GET /auth/me` proxy and validate Supabase Auth. Set `ADMIN_EMAIL` and the server-only `SUPABASE_SECRET_KEY` and that user is promoted to Supabase `app_metadata.role=admin` on first sign-in; the application never stores passwords or issues its own login tokens.
 - Agent runs, sessions, tool invocations, and encrypted/redacted transcript entries are persisted. Learners can access only their own runs.
-- Run the test suite from the repository root with `uv run pytest -q --benchmark-disable` (backend and browser MCP tests); `tests/test_supabase_live.py` checks the auth contract against the real Supabase project from `backend/.env` (creating and deleting a throwaway confirmed user) and fails in CI without the `SUPABASE_URL`, `SUPABASE_PUBLISHABLE_KEY` and `SUPABASE_SECRET_KEY` repository secrets; run benchmarks with `pytest --benchmark-only`. The tests use controlled model and browser doubles but exercise the real browser-research pipeline.
+- Run the test suite from the repository root with `uv run pytest -q --benchmark-disable` (backend and browser MCP tests). For offline checks, add `--ignore=backend/tests/test_supabase_live.py`. The live Supabase test creates and deletes a throwaway confirmed user; it runs separately in CI on trusted same-repository PRs, main pushes, and manual runs, and still fails without its three Supabase secrets. Dependabot and fork PRs run the offline suite without these credentials. Run benchmarks with `pytest --benchmark-only`. The tests use controlled model and browser doubles but exercise the real browser-research pipeline.
 
 ## Next product milestones
 

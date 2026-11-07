@@ -3,15 +3,17 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import sys
 from contextlib import asynccontextmanager
 from pathlib import Path
 from uuid import uuid4
 
+import pytest
 from fastapi.testclient import TestClient
 from langchain_core.messages import AIMessage
 from langchain_core.outputs import ChatGeneration, ChatResult
-from langchain_core.tools import StructuredTool
+from langchain_core.tools import StructuredTool, ToolException
 from langchain_litellm import ChatLiteLLM
 
 from app.agents.researcher import browser_tools
@@ -165,6 +167,12 @@ def test_browser_mcp_server_exposes_only_search_and_read(tmp_path, monkeypatch):
 
     async def tool_names():
         async with browser_tools() as tools:
+            search = next(tool for tool in tools if tool.name == "browser_search")
+            assert search.args_schema["properties"]["query"]["type"] == "string"
+            assert search.metadata["annotations"]["readOnlyHint"] is True
+            assert json.loads(await search.ainvoke({"query": ""}))["error"]["code"] == "invalid_query"
+            with pytest.raises(ToolException):
+                await search.ainvoke({})
             return sorted(tool.name for tool in tools)
 
     assert asyncio.run(tool_names()) == ["browser_read", "browser_search"]

@@ -4,11 +4,12 @@ import os
 import sys
 from collections.abc import AsyncIterator, Callable
 from contextlib import asynccontextmanager
+from functools import partial
 from pathlib import Path
 
-from langchain_core.tools import BaseTool, StructuredTool
-from langchain_mcp_adapters.client import MultiServerMCPClient
-from langchain_mcp_adapters.tools import load_mcp_tools
+from langchain_core.tools import BaseTool, StructuredTool, ToolException
+from mcp import Client, StdioServerParameters
+from mcp.types import TextContent
 
 from app.schemas.learning import CoverageItem, LearningGoal, SavedPage
 
@@ -64,14 +65,25 @@ def progress_tools(
 @asynccontextmanager
 async def browser_tools() -> AsyncIterator[list[BaseTool]]:
     """One browser MCP server process per run, so its budgets apply to the whole run."""
-    client = MultiServerMCPClient({
-        "browser": {
-            "transport": "stdio",
-            "command": sys.executable,
-            "args": ["-m", "browser_mcp.server"],
-            # The server reads SEARXNG_URL, RESEARCH_MAX_* and AGENT_BROWSER_COMMAND.
-            "env": dict(os.environ),
-        }
-    })
-    async with client.session("browser") as session:
-        yield await load_mcp_tools(session)
+    server = StdioServerParameters(
+        command=sys.executable, args=["-m", "browser_mcp.server"], env=dict(os.environ),
+    )
+    async with Client(server) as client:
+        async def call(name: str, **arguments):
+            result = await client.call_tool(name, arguments)
+            text = "\n".join(block.text for block in result.content if isinstance(block, TextContent))
+            if result.is_error:
+                raise ToolException(text)
+            return result.structured_content if result.structured_content is not None else text
+
+        listed = await client.list_tools()
+        yield [
+            StructuredTool(
+                name=tool.name,
+                description=tool.description or tool.name,
+                args_schema=tool.input_schema,
+                coroutine=partial(call, tool.name),
+                metadata={"annotations": tool.annotations.model_dump(by_alias=True)} if tool.annotations else {},
+            )
+            for tool in listed.tools
+        ]

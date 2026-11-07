@@ -5,8 +5,7 @@ description = "Restricted public-web browser MCP server: SearXNG search and hard
 requires-python = ">=3.12"
 dependencies = [
     "httpx>=0.28,<1",
-    # The server is written against the FastMCP 1.x API (mcp.server.fastmcp).
-    "mcp>=1.28.1,<2",
+    "mcp>=2.3,<3",
 ]
 
 [project.scripts]

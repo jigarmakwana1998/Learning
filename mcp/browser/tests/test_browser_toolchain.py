@@ -25,9 +25,9 @@ def test_browser_toolchain_is_exactly_pinned_in_manifest_and_lockfile():
     assert browser_package["engines"]["node"].startswith(">=24")
 
 
-def test_mcp_sdk_stays_on_fastmcp_1x():
+def test_mcp_sdk_requires_version_2():
     pyproject = tomllib.loads((PACKAGE_ROOT / "pyproject.toml").read_text(encoding="utf-8"))
-    assert "mcp>=1.28.1,<2" in pyproject["project"]["dependencies"]
+    assert "mcp>=2.3,<3" in pyproject["project"]["dependencies"]
 
 
 def test_bootstrap_scripts_install_locked_packages_browser_and_run_doctor():

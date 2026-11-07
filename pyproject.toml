@@ -1,4 +1,8 @@
 # uv workspace: the API, its database package, and the MCP servers share one lock.
+[tool.uv]
+# LiteLLM's <4 cap excludes security fixes; retain the patched version already used here.
+override-dependencies = ["filelock==4.2.4"]
+
 [tool.uv.workspace]
 members = ["backend", "database", "mcp/browser"]
 

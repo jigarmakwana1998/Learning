@@ -9,6 +9,8 @@ from __future__ import annotations
 import re
 from pathlib import Path
 
+import pytest
+
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 
@@ -69,7 +71,16 @@ def test_compose_gives_only_api_public_egress_and_ephemeral_browser_state():
 
 
 def test_litellm_mcp_client_imports_with_pinned_mcp():
-    # litellm>=1.103 imports mcp 2 types here and broke /learning-runs at runtime.
+    # Both the model gateway and the browser server must use the same MCP major.
     import importlib
 
     importlib.import_module("litellm.experimental_mcp_client")
+
+
+def test_patched_filelock_keeps_litellm_lock_contract(tmp_path):
+    from filelock import FileLock, Timeout
+
+    path = str(tmp_path / "profile.lock")
+    with FileLock(path, timeout=10, mode=0o600), pytest.raises(Timeout):
+        with FileLock(path, timeout=0, mode=0o600):
+            pytest.fail("A second lock must not enter while the first holds the file")
