@@ -67,9 +67,12 @@ def _native_package_binary(package_directory: Path) -> Path | None:
 class AgentBrowserClient:
     """Use one ephemeral, domain-confined Chrome session per browser operation."""
 
-    def __init__(self, *, command: list[str] | None = None, timeout_seconds: float = 90) -> None:
+    def __init__(
+        self, *, command: list[str] | None = None, timeout_seconds: float = 90, max_output: int = 6000
+    ) -> None:
         self.command = list(command or resolve_agent_browser_command())
         self.timeout_seconds = timeout_seconds
+        self.max_output = str(max_output)
         self.policy_path = Path(__file__).with_name("action-policy.json").resolve()
 
     async def run(self, session: str, host: str, *arguments: str) -> Any:
@@ -81,7 +84,7 @@ class AgentBrowserClient:
             "--json",
             "--content-boundaries",
             "--max-output",
-            "6000",
+            self.max_output,
             "--allowed-domains",
             allowed_domains,
             "--action-policy",
@@ -128,7 +131,7 @@ class AgentBrowserClient:
             session,
             "--content-boundaries",
             "--max-output",
-            "6000",
+            self.max_output,
             "--allowed-domains",
             allowed_domains,
             "--action-policy",
@@ -202,7 +205,7 @@ class AgentBrowserClient:
         environment.update(
             {
                 "AGENT_BROWSER_CONTENT_BOUNDARIES": "1",
-                "AGENT_BROWSER_MAX_OUTPUT": "6000",
+                "AGENT_BROWSER_MAX_OUTPUT": self.max_output,
                 "AGENT_BROWSER_ALLOWED_DOMAINS": allowed_domains,
                 "AGENT_BROWSER_ACTION_POLICY": str(self.policy_path),
                 "AGENT_BROWSER_DEFAULT_TIMEOUT": "25000",

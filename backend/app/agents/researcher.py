@@ -1,20 +1,18 @@
 """The single research agent: browser MCP tools, skills, and two tools that publish progress."""
 
 import os
-import sys
-from collections.abc import AsyncIterator, Callable
-from contextlib import asynccontextmanager
-from functools import partial
+from collections.abc import Callable
+from contextlib import AbstractAsyncContextManager
 from pathlib import Path
 
-from langchain_core.tools import BaseTool, StructuredTool, ToolException
-from mcp import Client, StdioServerParameters
-from mcp.types import TextContent
+from langchain_core.tools import BaseTool, StructuredTool
 
 from app.schemas.learning import CoverageItem, LearningGoal, SavedPage
 
+from .mcp_tools import server_tools
+
 NAME = "Researcher"
-SKILLS_DIR = Path(__file__).resolve().parents[1] / "skills"
+SKILLS_DIR = Path(__file__).resolve().parents[1] / "skills" / "research"
 
 SYSTEM_PROMPT = (
     "You are the Researcher in an evidence-grounded learning app. Find the public web pages a learner should study "
@@ -62,28 +60,6 @@ def progress_tools(
     ]
 
 
-@asynccontextmanager
-async def browser_tools() -> AsyncIterator[list[BaseTool]]:
+def browser_tools() -> AbstractAsyncContextManager[list[BaseTool]]:
     """One browser MCP server process per run, so its budgets apply to the whole run."""
-    server = StdioServerParameters(
-        command=sys.executable, args=["-m", "browser_mcp.server"], env=dict(os.environ),
-    )
-    async with Client(server) as client:
-        async def call(name: str, **arguments):
-            result = await client.call_tool(name, arguments)
-            text = "\n".join(block.text for block in result.content if isinstance(block, TextContent))
-            if result.is_error:
-                raise ToolException(text)
-            return result.structured_content if result.structured_content is not None else text
-
-        listed = await client.list_tools()
-        yield [
-            StructuredTool(
-                name=tool.name,
-                description=tool.description or tool.name,
-                args_schema=tool.input_schema,
-                coroutine=partial(call, tool.name),
-                metadata={"annotations": tool.annotations.model_dump(by_alias=True)} if tool.annotations else {},
-            )
-            for tool in listed.tools
-        ]
+    return server_tools("browser_mcp.server", dict(os.environ))

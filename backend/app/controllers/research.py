@@ -6,7 +6,7 @@ from learning_db.session import get_db
 from app.core.dependencies import get_current_user
 from app.core.security import decrypt
 from learning_db.models import (
-    AgentRun, AgentSessionRecord, LearningRequest, McpToolInvocation,
+    AgentRun, AgentSessionRecord, Course, LearningRequest, McpToolInvocation,
     TranscriptEntryRecord, User,
 )
 from app.schemas.learning import LearningGoal, ResearchRun
@@ -29,7 +29,7 @@ async def create_research_run(goal: LearningGoal, background_tasks: BackgroundTa
 
 @router.get("")
 async def list_research_runs(db: AsyncSession = Depends(get_db), user: User = Depends(get_current_user)) -> list[dict]:
-    rows = (await db.execute(select(AgentRun, LearningRequest).join(LearningRequest, AgentRun.learning_request_id == LearningRequest.id).where(LearningRequest.user_id == user.id).order_by(AgentRun.started_at.desc()))).all()
+    rows = (await db.execute(select(AgentRun, LearningRequest).join(LearningRequest, AgentRun.learning_request_id == LearningRequest.id).where(LearningRequest.user_id == user.id, AgentRun.id.not_in(select(Course.id))).order_by(AgentRun.started_at.desc()))).all()
     return [{"id": run.id, "topic": request.topic, "harness": run.harness, "status": run.status, "created_at": run.started_at} for run, request in rows]
 
 

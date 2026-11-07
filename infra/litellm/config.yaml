@@ -4,15 +4,16 @@
 model_list:
   - model_name: agent-model
     litellm_params:
-      model: openai/z-ai/glm-5.3-flash
-      api_base: https://integrate.api.nvidia.com/v1
-      api_key: os.environ/NVIDIA_API_KEY
+      model: openai/gpt-5-nano
+      api_key: os.environ/OPENAI_API_KEY
     model_info:
-      max_input_tokens: 1048576
+      max_input_tokens: 400000
       supports_function_calling: true
 
 litellm_settings:
   json_logs: true
+  # GPT-5 models reject parameters they do not support (e.g. temperature).
+  drop_params: true
 
 general_settings:
   master_key: os.environ/LITELLM_MASTER_KEY

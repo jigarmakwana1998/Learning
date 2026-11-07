@@ -117,6 +117,8 @@ class AgentHarness:
                     metadata={"harness": self.harness, "raw_event": event},
                 )
 
+            # Release SQLite's write lock: MCP servers write to the database while the agent runs.
+            await self.db.commit()
             execution = await DeepAgentRuntime().execute(
                 prompt,
                 session_id=session_id,

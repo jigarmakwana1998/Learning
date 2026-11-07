@@ -9,7 +9,7 @@ from app.agents import researcher
 from app.harness import AgentHarness
 from app.harness.deep_agents import AgentEventCollector
 from app.schemas.learning import CoverageItem, LearningGoal, ResearchRun, SavedPage
-from learning_db.models import AgentRun, LearningRequest, User
+from learning_db.models import AgentRun, Course, LearningRequest, User
 from learning_db.session import SessionLocal
 
 logger = logging.getLogger(__name__)
@@ -62,6 +62,7 @@ class ResearchService:
                     system_prompt=researcher.SYSTEM_PROMPT,
                     tools=[*browser, *tools],
                     collector=progress.collector,
+                    skills_dir=researcher.SKILLS_DIR,
                 )
             if not progress.pages:
                 raise ValueError("Research found no pages for this topic.")
@@ -85,7 +86,7 @@ class ResearchService:
             await db.execute(
                 select(AgentRun, LearningRequest)
                 .join(LearningRequest)
-                .where(AgentRun.id == run_id, LearningRequest.user_id == user.id)
+                .where(AgentRun.id == run_id, LearningRequest.user_id == user.id, AgentRun.id.not_in(select(Course.id)))
             )
         ).first()
         return (row[0], row[1]) if row else None

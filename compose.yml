@@ -89,7 +89,7 @@ services:
     command: ["--config", "/app/config.yaml", "--port", "4000"]
     environment:
       DATABASE_URL: postgresql://learning_coach:${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}@postgres:5432/learning_coach
-      NVIDIA_API_KEY: ${NVIDIA_API_KEY:?Set NVIDIA_API_KEY in .env}
+      OPENAI_API_KEY: ${OPENAI_API_KEY:?Set OPENAI_API_KEY in .env}
       LITELLM_MASTER_KEY: ${LITELLM_MASTER_KEY:?Set LITELLM_MASTER_KEY in .env}
       LITELLM_LOG: ${LOG_LEVEL:-DEBUG}
     depends_on:
