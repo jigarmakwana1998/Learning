@@ -13,7 +13,7 @@ export default function ObservabilityPage() {
   const [token, setToken] = useState<string>();
   const [selectedRunId, setSelectedRunId] = useState<string>();
   const [openEvent, setOpenEvent] = useState<string>();
-  useEffect(() => setToken(sessionStorage.getItem(tokenKey) ?? undefined), []);
+  useEffect(() => { setToken(sessionStorage.getItem(tokenKey) ?? undefined); setSelectedRunId(new URLSearchParams(window.location.search).get("run") ?? undefined); }, []);
   const me = useQuery({ queryKey: ["me", token], queryFn: () => getMe(token!), enabled: Boolean(token), retry: false });
   const runs = useQuery({ queryKey: ["trace-runs", token], queryFn: () => getTraceRuns(token!), enabled: Boolean(token) });
   useEffect(() => { if (!selectedRunId && runs.data?.[0]) setSelectedRunId(runs.data[0].id); }, [runs.data, selectedRunId]);
