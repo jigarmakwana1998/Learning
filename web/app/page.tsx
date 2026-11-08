@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { useMutation, useQuery } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { AlertTriangle, BookOpenCheck } from "lucide-react";
 import { AppShell } from "@/components/app-shell";
 import { AuthPanel } from "@/components/auth-panel";
@@ -10,7 +10,7 @@ import { IntakeForm } from "@/components/intake-form";
 import { ResearchResults } from "@/components/research-results";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
-import { getMe, getResearchRun, startResearchRun, type TopicIntent } from "@/lib/api";
+import { getMe, getResearchRun, getResearchRuns, startResearchRun, type TopicIntent } from "@/lib/api";
 
 const tokenKey = "learning-coach-token";
 
@@ -18,13 +18,15 @@ export default function Home() {
   const [token, setToken] = useState<string>();
   const [ready, setReady] = useState(false);
   const [runId, setRunId] = useState<string>();
+  const queryClient = useQueryClient();
   useEffect(() => { setToken(sessionStorage.getItem(tokenKey) ?? undefined); setReady(true); }, []);
   const userQuery = useQuery({ queryKey: ["me", token], queryFn: () => getMe(token!), enabled: Boolean(token), retry: false });
-  const generation = useMutation({ mutationFn: (intent: TopicIntent) => startResearchRun(intent, token!), onSuccess: ({ id }) => setRunId(id) });
+  const history = useQuery({ queryKey: ["research-runs", token], queryFn: () => getResearchRuns(token!), enabled: Boolean(token && userQuery.data) });
+  const generation = useMutation({ mutationFn: (intent: TopicIntent) => startResearchRun(intent, token!), onSuccess: ({ id }) => { setRunId(id); queryClient.invalidateQueries({ queryKey: ["research-runs", token] }); } });
   // Poll while the agent works so coverage and pages appear as they arrive.
   const run = useQuery({ queryKey: ["research-run", runId, token], queryFn: () => getResearchRun(runId!, token!), enabled: Boolean(token && runId), refetchInterval: (query) => (query.state.data?.status === "running" || !query.state.data ? 2000 : false) });
 
-  function signOut() { sessionStorage.removeItem(tokenKey); setToken(undefined); setRunId(undefined); }
+  function signOut() { sessionStorage.removeItem(tokenKey); setToken(undefined); setRunId(undefined); queryClient.clear(); }
   if (!ready) return <main className="grid min-h-screen place-items-center text-muted-foreground" aria-live="polite">Loading Learning Coach...</main>;
   if (!token) return <PublicLanding onAuthenticated={setToken} />;
   if (userQuery.isError) return <PublicLanding error="Your session has expired. Please sign in again." onAuthenticated={setToken} />;
@@ -34,9 +36,11 @@ export default function Home() {
     <div className="grid gap-8">
       {generation.error && <p role="alert" className="rounded-xl border border-red-200 bg-red-50 p-4 text-red-800 dark:border-red-900 dark:bg-red-950 dark:text-red-200">{generation.error instanceof Error ? generation.error.message : "We could not research that topic. Please try again."}</p>}
       <IntakeForm onSubmit={generation.mutate} pending={generation.isPending} />
+      <Card><h2 className="text-xl font-bold">Your research</h2>{history.isLoading ? <p>Loading history...</p> : history.isError ? <p role="alert">Could not load research history. <button className="underline" onClick={() => history.refetch()}>Try again</button></p> : history.data?.length ? <ul className="mt-3 grid gap-2">{history.data.map((item) => <li key={item.id}><Button variant={runId === item.id ? "default" : "secondary"} onClick={() => setRunId(item.id)} aria-pressed={runId === item.id}>{item.topic} · {item.status} · {new Date(item.created_at).toLocaleDateString()}</Button></li>)}</ul> : <p className="mt-2 text-muted-foreground">Your research sessions will appear here.</p>}</Card>
+      {run.isError && <p role="alert">Could not update this session. <button className="underline" onClick={() => run.refetch()}>Try again</button></p>}
       {run.data?.status === "failed" && <p role="alert" className="rounded-xl border border-red-200 bg-red-50 p-4 text-red-800 dark:border-red-900 dark:bg-red-950 dark:text-red-200">{run.data.error ?? "Research failed. Please try again."}</p>}
       {run.data && <ResearchResults run={run.data} />}
-      {run.data?.status === "completed" && <CoursePanel researchRunId={run.data.id} token={token} />}
+      {run.data?.status === "completed" && <CoursePanel key={run.data.id} researchRunId={run.data.id} token={token} />}
     </div>
   </AppShell>;
 }
