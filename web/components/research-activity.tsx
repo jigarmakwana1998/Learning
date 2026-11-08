@@ -5,10 +5,10 @@ import { useEffect } from "react";
 import { Card } from "@/components/ui/card";
 import { getResearchActivity } from "@/lib/api";
 
-export function ResearchActivity({ runId, token, running }: { runId: string; token: string; running: boolean }) {
-  const activity = useQuery({ queryKey: ["research-activity", runId, token], queryFn: () => getResearchActivity(runId, token), refetchInterval: running ? 5000 : false });
+export function ResearchActivity({ runId, token, running, active }: { runId: string; token: string; running: boolean; active: boolean }) {
+  const activity = useQuery({ queryKey: ["research-activity", runId, token], queryFn: () => getResearchActivity(runId, token), enabled: active, refetchInterval: active && running ? 5000 : false });
   const { refetch } = activity;
-  useEffect(() => { if (!running) refetch(); }, [running, refetch]);
+  useEffect(() => { if (active && !running) refetch(); }, [active, running, refetch]);
   return <section aria-label="Research activity" className="grid gap-4">
     <h2 className="text-2xl font-bold">Research activity</h2>
     {activity.isLoading && <p>Loading activity...</p>}

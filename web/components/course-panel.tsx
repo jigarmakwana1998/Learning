@@ -27,9 +27,12 @@ export function CoursePanel({ researchRunId, token }: { researchRunId: string; t
     <Card className="grid gap-3">
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div><h2 className="text-2xl font-bold">Course</h2><p className="text-muted-foreground">Chapters written from these pages; every fact links to the text it comes from.</p></div>
-        <Button onClick={() => build.mutate()} disabled={building} className="gap-2"><NotebookPen size={18} aria-hidden="true" />{versions.data?.length ? "Build new version" : "Build course"}</Button>
+        <Button onClick={() => build.mutate()} disabled={building || versions.isPending || versions.isError} className="gap-2"><NotebookPen size={18} aria-hidden="true" />{versions.data?.length ? "Build new version" : "Build course"}</Button>
       </div>
       {build.error && <p role="alert" className="text-sm text-red-700 dark:text-red-300">{build.error instanceof Error ? build.error.message : "The course could not be started."}</p>}
+      {versions.isPending && <p role="status" className="text-sm text-muted-foreground">Loading course versions...</p>}
+      {versions.isError && <p role="alert" className="text-sm text-red-700 dark:text-red-300">Could not load course versions. <button className="underline" onClick={() => versions.refetch()}>Try again</button></p>}
+      {course.isError && <p role="alert" className="text-sm text-red-700 dark:text-red-300">Could not load the course. <button className="underline" onClick={() => course.refetch()}>Try again</button></p>}
       {Boolean(versions.data?.length) && <div className="flex flex-wrap gap-2" role="group" aria-label="Course versions">
         {versions.data!.map((v) => <Button key={v.id} variant={v.id === courseId ? "default" : "secondary"} onClick={() => setSelected(v.id)} aria-pressed={v.id === courseId}>
           v{v.version} · {v.status} · {new Date(v.created_at).toLocaleString()}
