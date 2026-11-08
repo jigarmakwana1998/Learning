@@ -6,7 +6,7 @@ from learning_db.session import get_db
 from app.core.dependencies import get_current_user
 from app.core.security import decrypt
 from learning_db.models import (
-    AgentRun, AgentSessionRecord, Course, LearningRequest, McpToolInvocation,
+    AgentRun, AgentSessionRecord, AgentTraceEvent, Course, LearningRequest, McpToolInvocation, SourcePage,
     TranscriptEntryRecord, User,
 )
 from app.schemas.learning import LearningGoal, ResearchRun
@@ -38,6 +38,28 @@ async def _owned_run_or_404(run_id: str, db: AsyncSession, user: User) -> tuple[
     if not owned:
         raise HTTPException(status_code=404, detail="Research run not found")
     return owned
+
+
+@router.get("/{run_id}/activity")
+async def research_activity(run_id: str, db: AsyncSession = Depends(get_db), user: User = Depends(get_current_user)) -> dict:
+    await _owned_run_or_404(run_id, db, user)
+    sessions = (await db.scalars(select(AgentSessionRecord).where(AgentSessionRecord.agent_run_id == run_id).order_by(AgentSessionRecord.started_at))).all()
+    sources = (await db.scalars(select(SourcePage).where(SourcePage.research_run_id == run_id))).all()
+    source_text = {source.url: source.text for source in sources}
+    items = []
+    for session in sessions:
+        events = (await db.scalars(select(AgentTraceEvent).where(AgentTraceEvent.session_id == session.id, AgentTraceEvent.name.in_(["browser_search", "browser_read"]), AgentTraceEvent.output_payload.is_not(None)).order_by(AgentTraceEvent.created_at))).all()
+        activity = [{"tool": event.name, "input": event.input_payload or {}, "output": event.output_payload or {}} for event in events]
+        if not activity:
+            previous = (await db.scalars(select(McpToolInvocation).where(McpToolInvocation.session_id == session.id, McpToolInvocation.tool_name.in_(["browser_search", "browser_read"])).order_by(McpToolInvocation.created_at))).all()
+            activity = [{"tool": event.tool_name, "input": (event.metadata_json or {}).get("input", {}), "output": {"results": (event.metadata_json or {}).get("results", [])}} for event in previous]
+            for entry in activity:
+                if entry["tool"] == "browser_read":
+                    for page in entry["output"]["results"]:
+                        if page.get("url") in source_text:
+                            page["content"] = source_text[page["url"]]
+        items.append({"id": session.id, "agent_name": session.agent_name, "status": session.status, "output": session.output_payload, "activity": activity})
+    return {"run_id": run_id, "sessions": items}
 
 
 @router.get("/{run_id}/trace", response_model=LearningRunTraceResponse)

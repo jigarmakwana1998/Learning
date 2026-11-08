@@ -4,6 +4,7 @@ export type CoverageItem = { id: string; question: string; status: "missing" | "
 export type SavedPage = { url: string; title: string; kind: "documentation" | "paper" | "book" | "lecture" | "slides" | "article" | "repository"; why: string; key_points: string[]; covers: string[] };
 export type ResearchRun = { id: string; topic: string; status: "running" | "completed" | "failed"; error?: string | null; activity?: string | null; coverage: CoverageItem[]; pages: SavedPage[] };
 export type ResearchHistoryItem = { id: string; topic: string; status: ResearchRun["status"]; created_at: string };
+export type ResearchActivity = { run_id: string; sessions: Array<{ id: string; agent_name: string; status: string; output: unknown; activity: Array<{ tool: string; input: Record<string, unknown>; output: Record<string, unknown> }> }> };
 export type Sentence = { text: string; kind: "fact" | "explanation"; cites: Array<{ passage: string; quote: string }>; warning: string | null };
 export type Chapter = { id: string; title: string; sections: Array<{ id: string; title: string; covers: string[] }> };
 export type CourseVersion = { id: string; version: number; status: ResearchRun["status"]; created_at: string };
@@ -46,6 +47,7 @@ export const startResearchRun = (intent: TopicIntent, token: string) =>
   request<{ id: string }>("/research-runs", { method: "POST", body: JSON.stringify({ topic: intent.topic, level: intent.level, hours_per_week: intent.hoursPerWeek, weeks: intent.weeks }) }, token);
 export const getResearchRun = (id: string, token: string) => request<ResearchRun>(`/research-runs/${id}`, {}, token);
 export const getResearchRuns = (token: string) => request<ResearchHistoryItem[]>("/research-runs", {}, token);
+export const getResearchActivity = (id: string, token: string) => request<ResearchActivity>(`/research-runs/${id}/activity`, {}, token);
 export const buildCourse = (researchRunId: string, token: string) => request<{ id: string }>(`/research-runs/${researchRunId}/courses`, { method: "POST" }, token);
 export const getCourseVersions = (researchRunId: string, token: string) => request<CourseVersion[]>(`/research-runs/${researchRunId}/courses`, {}, token);
 export const getCourse = (id: string, token: string) => request<Course>(`/courses/${id}`, {}, token);

@@ -13,7 +13,7 @@ import {
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 
-import { buildCourse, Course, CourseVersion, getCourse, getCourseVersions, getMe, getResearchRun, getResearchRuns, login, logout, register, ResearchHistoryItem, ResearchRun, Sentence, startResearchRun, User } from "@/lib/api";
+import { buildCourse, Course, CourseVersion, getCourse, getCourseVersions, getMe, getResearchActivity, getResearchRun, getResearchRuns, login, logout, register, ResearchActivity, ResearchHistoryItem, ResearchRun, Sentence, startResearchRun, User } from "@/lib/api";
 
 function openPublicUrl(url: string) {
   if (!url.startsWith("https://")) return;
@@ -120,12 +120,43 @@ export default function HomeScreen() {
                 <CoverageList run={run} />
               </View>
             )}
+            {run && <ActivityHistory key={run.id} runId={run.id} running={run.status === "running"} />}
             {run?.status === "completed" && <CourseSection key={run.id} researchRunId={run.id} />}
           </>
         )}
       </ScrollView>
     </SafeAreaView>
   );
+}
+
+function ActivityHistory({ runId, running }: { runId: string; running: boolean }) {
+  const [data, setData] = useState<ResearchActivity | null>(null);
+  const [error, setError] = useState(false);
+  const [open, setOpen] = useState<string | null>(null);
+  useEffect(() => {
+    const refresh = () => getResearchActivity(runId).then((result) => { setData(result); setError(false); }).catch(() => setError(true));
+    refresh();
+    if (!running) return;
+    const timer = setInterval(refresh, 5000);
+    return () => clearInterval(timer);
+  }, [runId, running]);
+  return <View style={styles.card}><Text style={styles.cardTitle}>Research activity</Text>
+    {error && <Text accessibilityRole="alert" style={styles.error}>Could not load research activity.</Text>}
+    {data?.sessions.map((session) => <View key={session.id} style={styles.sectionStack}>
+      <Text style={styles.label}>{session.agent_name} · {session.status}</Text>
+      {session.activity.map((item, i) => {
+        const key = `${session.id}-${i}`;
+        const pages = (item.output.results ?? item.output.pages ?? []) as Array<Record<string, unknown>>;
+        return <View key={key}><Pressable accessibilityRole="button" accessibilityState={{ expanded: open === key }} onPress={() => setOpen(open === key ? null : key)}><Text style={styles.link}>{item.tool === "browser_search" ? `Search: ${String(item.input.query ?? "Query unavailable")}` : "Pages read"}</Text></Pressable>
+          {open === key && pages.map((page, j) => <View key={j} style={styles.module}>
+            {typeof page.url === "string" && page.url.startsWith("https://") ? <Pressable accessibilityRole="link" onPress={() => openPublicUrl(page.url as string)}><Text style={styles.sourceLinkText}>{String(page.title || page.url)}</Text></Pressable> : <Text>{String(page.title || page.requested_url || "Page unavailable")}</Text>}
+            {typeof page.content === "string" && <Text style={styles.paragraph}>{page.content}</Text>}
+          </View>)}
+        </View>;
+      })}
+      {session.output != null && <View><Pressable accessibilityRole="button" accessibilityState={{ expanded: open === session.id }} onPress={() => setOpen(open === session.id ? null : session.id)}><Text style={styles.link}>Agent output</Text></Pressable>{open === session.id && <Text style={styles.paragraph}>{JSON.stringify(session.output, null, 2)}</Text>}</View>}
+    </View>)}
+  </View>;
 }
 
 function CoverageList({ run }: { run: ResearchRun }) {
