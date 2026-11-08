@@ -1,6 +1,6 @@
 import { ExternalLink, LoaderCircle } from "lucide-react";
 import { Card } from "@/components/ui/card";
-import type { CoverageItem, ResearchRun } from "@/lib/api";
+import type { CoverageItem, ResearchRun, SavedPage } from "@/lib/api";
 
 const statusStyle: Record<CoverageItem["status"], string> = {
   covered: "bg-emerald-100 text-emerald-800 dark:bg-emerald-950 dark:text-emerald-200",
@@ -11,6 +11,7 @@ const statusStyle: Record<CoverageItem["status"], string> = {
 /** The coverage checklist for a topic, each item with the pages that cover it, filled in as the agent works. */
 export function ResearchResults({ run }: { run: ResearchRun }) {
   const running = run.status === "running";
+  const unassigned = run.pages.filter((page) => !run.coverage.some((item) => page.covers.includes(item.id)));
   return <section className="grid gap-4" aria-label="Research results" aria-busy={running}>
     <div>
       <h2 className="text-2xl font-bold">{run.topic}</h2>
@@ -21,12 +22,17 @@ export function ResearchResults({ run }: { run: ResearchRun }) {
       const pages = run.pages.filter((page) => page.covers.includes(item.id));
       return <Card key={item.id} className="grid gap-3">
         <div className="flex flex-wrap items-start justify-between gap-2"><h3 className="font-semibold">{item.question}</h3><span className={`rounded-full px-2 py-0.5 text-xs font-semibold ${statusStyle[item.status]}`}>{item.status}</span></div>
-        {pages.length ? <ul className="grid gap-3">{pages.map((page) => <li key={page.url} className="grid gap-1">
-          <a href={page.url} target="_blank" rel="noopener noreferrer" className="inline-flex items-center gap-1 font-medium text-primary underline-offset-4 hover:underline">{page.title}<ExternalLink size={14} aria-hidden="true" /></a>
-          <p className="text-sm">{page.why}</p>
-          <ul className="list-disc pl-5 text-sm text-muted-foreground">{page.key_points.map((point) => <li key={point}>{point}</li>)}</ul>
-        </li>)}</ul> : <p className="text-sm text-muted-foreground">{running ? "Looking for pages..." : "No page found for this."}</p>}
+        {pages.length ? <SourcePages pages={pages} /> : <p className="text-sm text-muted-foreground">{running ? "Looking for pages..." : "No page found for this."}</p>}
       </Card>;
     })}
+    {unassigned.length > 0 && <Card className="grid gap-3"><h3 className="font-semibold">Additional sources</h3><SourcePages pages={unassigned} /></Card>}
   </section>;
+}
+
+function SourcePages({ pages }: { pages: SavedPage[] }) {
+  return <ul className="grid gap-3">{pages.map((page) => <li key={page.url} className="grid gap-1">
+    <a href={page.url.startsWith("https://") ? page.url : undefined} target="_blank" rel="noopener noreferrer" className="inline-flex items-center gap-1 font-medium text-primary underline-offset-4 hover:underline">{page.title || page.url}<ExternalLink size={14} aria-hidden="true" /></a>
+    {page.why && <p className="text-sm">{page.why}</p>}
+    <ul className="list-disc pl-5 text-sm text-muted-foreground">{page.key_points.map((point) => <li key={point}>{point}</li>)}</ul>
+  </li>)}</ul>;
 }

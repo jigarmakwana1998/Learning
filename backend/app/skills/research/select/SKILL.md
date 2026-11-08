@@ -4,7 +4,7 @@ description: Choose which search results to read next. Use after browser_search 
 ---
 # Select pages to read
 
-1. Look only at coverage items that are not yet covered.
+1. Focus on the questions in the assignment and gaps in the existing sources.
 2. Choose the results most likely to answer those items: official documentation,
    primary work, clear explanatory material or practical code, when that form
    serves the item. Do not pick a page just to vary the source types.

@@ -1,9 +1,8 @@
-from typing import Annotated, Literal
+from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
 AgentHarness = Literal["deep-agents"]
-SourceKind = Literal["documentation", "paper", "book", "lecture", "slides", "article", "repository"]
 
 
 class LearningGoal(BaseModel):
@@ -14,25 +13,23 @@ class LearningGoal(BaseModel):
 
 
 class AgentOutput(BaseModel):
-    """Tool arguments the agent writes. Minimums live here so a violation goes back to the model to fix."""
-
-    # Whitespace-only strings must not satisfy a minimum length.
+    """Agent-written metadata, without content length or completeness requirements."""
     model_config = ConfigDict(str_strip_whitespace=True)
 
 
 class CoverageItem(AgentOutput):
-    id: str = Field(min_length=1, description="Short stable id, reused in save_page covers.")
-    question: str = Field(min_length=8, description="What the pages must answer for this item.")
+    id: str = Field(description="Short stable id, reused in save_page covers.")
+    question: str = Field(description="What the pages should answer for this item.")
     status: Literal["missing", "partial", "covered"] = "missing"
 
 
 class SavedPage(AgentOutput):
-    url: str = Field(min_length=8, description="Exact final URL from a browser_read result.")
-    title: str = Field(min_length=2)
-    kind: SourceKind
-    why: str = Field(min_length=8, description="What this page can teach in this course.")
-    key_points: list[Annotated[str, Field(min_length=20)]] = Field(min_length=1)
-    covers: list[str] = Field(min_length=1, description="Ids of the coverage items this page supports.")
+    url: str = Field(description="URL of the source page.")
+    title: str = ""
+    kind: str = "article"
+    why: str = ""
+    key_points: list[str] = Field(default_factory=list)
+    covers: list[str] = Field(default_factory=list, description="Coverage ids this page supports, when available.")
 
 
 class ResearchRun(BaseModel):

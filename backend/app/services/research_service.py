@@ -1,9 +1,6 @@
 import logging
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
-
-from sqlalchemy import select
-from sqlalchemy.ext.asyncio import AsyncSession
+from datetime import UTC, datetime
 
 from app.agents import researcher
 from app.harness import AgentHarness
@@ -11,6 +8,8 @@ from app.harness.deep_agents import AgentEventCollector
 from app.schemas.learning import CoverageItem, LearningGoal, ResearchRun, SavedPage
 from learning_db.models import AgentRun, Course, LearningRequest, User
 from learning_db.session import SessionLocal
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
 
 logger = logging.getLogger(__name__)
 
@@ -64,10 +63,8 @@ class ResearchService:
                     collector=progress.collector,
                     skills_dir=researcher.SKILLS_DIR,
                 )
-            if not progress.pages:
-                raise ValueError("Research found no pages for this topic.")
             error = None
-        except (RuntimeError, ValueError) as failure:
+        except Exception as failure:
             error = str(failure)
             raise
         finally:
@@ -77,7 +74,7 @@ class ResearchService:
                 "pages": [page.model_dump() for page in progress.pages],
                 "error": error,
             }
-            run.completed_at = datetime.now(timezone.utc)
+            run.completed_at = datetime.now(UTC)
             await db.commit()
             self.live.pop(run.id, None)
 

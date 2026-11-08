@@ -1,25 +1,9 @@
 ---
 name: review
-description: Check that every quote supports its sentence, fix every warning and finish the course with check_course. Use after writing sections.
+description: See saved progress and decide whether more research or writing is useful.
 ---
-# Review the course
+# Check progress
 
-1. Call `check_course`.
-2. Fix every warning before you finish; each one is highlighted for the
-   learner until you do:
-   - "Fact with no citation": find the passage that states it and cite it.
-     If no passage states it, remove the sentence.
-   - "Quote not found": copy the quote again, character for character, from
-     the one passage you cite.
-   - A number warning: quote the passage that contains the number, or remove
-     the number.
-   Rewrite the whole section with `write_section`, keeping its correct
-   sentences.
-3. For each written section, re-read the cited passages. A quote must state
-   every part of the fact in its sentence, not just share a topic with it.
-   If it does not, cite a passage that does, reword the sentence to say only
-   what the quote says, or remove it.
-4. `unwritten`: write those sections. `untaught`: search the sources once
-   more for those items; if nothing supports them, leave them as gaps.
-5. Call `check_course` again. Finish only when it shows no warnings and
-   nothing left that the sources can support.
+Use `check_course` and `read_section` to see saved work. Delegate useful follow-up
+research or revisions, and summarize remaining gaps when finished. Progress is
+informational; no mandatory review pass or warning-free completion is required.

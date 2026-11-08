@@ -9,6 +9,8 @@ import { buildCourse, getCourse, getCourseVersions, type Course, type Sentence }
 
 /** A link that opens the source page scrolled to the quoted text (a URL text fragment). */
 function quoteLink(url: string, quote: string) {
+  if (!url.startsWith("https://")) return undefined;
+  if (!quote) return url;
   return `${url.split("#")[0]}#:~:text=${encodeURIComponent(quote).replace(/-/g, "%2D")}`;
 }
 
@@ -26,7 +28,7 @@ export function CoursePanel({ researchRunId, token }: { researchRunId: string; t
   return <section className="grid gap-4" aria-label="Course">
     <Card className="grid gap-3">
       <div className="flex flex-wrap items-center justify-between gap-3">
-        <div><h2 className="text-2xl font-bold">Course</h2><p className="text-muted-foreground">Chapters written from these pages; every fact links to the text it comes from.</p></div>
+        <div><h2 className="text-2xl font-bold">Course</h2><p className="text-muted-foreground">Chapters built through focused research and writing, with source links where available.</p></div>
         <Button onClick={() => build.mutate()} disabled={building} className="gap-2"><NotebookPen size={18} aria-hidden="true" />{versions.data?.length ? "Build new version" : "Build course"}</Button>
       </div>
       {build.error && <p role="alert" className="text-sm text-red-700 dark:text-red-300">{build.error instanceof Error ? build.error.message : "The course could not be started."}</p>}
@@ -59,7 +61,7 @@ function CourseBody({ course }: { course: Course }) {
       })}
     </Card>)}
     {course.gaps.length > 0 && <Card><h3 className="font-semibold">Not covered by the sources</h3><ul className="mt-2 list-disc pl-5 text-sm text-muted-foreground">{course.gaps.map((gap) => <li key={gap}>{gap}</li>)}</ul></Card>}
-    {course.sources.length > 0 && <Card><h3 className="font-semibold">Sources</h3><ol className="mt-2 list-decimal pl-5 text-sm">{course.sources.map((item) => <li key={item.id}><a href={item.url} target="_blank" rel="noopener noreferrer" className="text-primary underline-offset-4 hover:underline">{item.title}</a></li>)}</ol></Card>}
+    {course.sources.length > 0 && <Card><h3 className="font-semibold">Sources</h3><ol className="mt-2 list-decimal pl-5 text-sm">{course.sources.map((item) => <li key={item.id}><a href={quoteLink(item.url, "")} target="_blank" rel="noopener noreferrer" className="text-primary underline-offset-4 hover:underline">{item.title || item.url}</a></li>)}</ol></Card>}
   </div>;
 }
 
