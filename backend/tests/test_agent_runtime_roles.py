@@ -46,6 +46,7 @@ async def test_tool_collector_redacts_browser_content_and_keeps_visit_evidence()
         "ignored",
         run_id=run_id,
         inputs={"urls": ["https://example.com/paper"]},
+        metadata={"lc_agent_name": "researcher"},
     )
     await collector.on_tool_end(
         {
@@ -71,6 +72,9 @@ async def test_tool_collector_redacts_browser_content_and_keeps_visit_evidence()
     ]
     assert "UNTRUSTED_PAGE_BODY" not in json.dumps(event.metadata)
     assert collector.visited_urls == {"https://example.com/paper"}
+    assert collector.read_pages["https://example.com/paper"]["content"] == "UNTRUSTED_PAGE_BODY"
+    assert event.metadata["agent"] == "researcher"
+    assert collector.activity.startswith("researcher:")
     assert saved[0]["output"]["pages"][0]["content"] == "UNTRUSTED_PAGE_BODY"
     assert saved[0]["input"] == {"urls": ["https://example.com/paper"]}
 

@@ -90,27 +90,36 @@ Copy `mobile/.env.example` to `mobile/.env`. For an iOS/Android device, set `EXP
 Poll `GET /research-runs/{id}`: it returns the status, the current tool activity,
 the coverage items and the pages saved so far, so results show as they arrive.
 
-One **Researcher** Deep Agent does the work. Its tools are the browser MCP server's
-`browser_search` (SearXNG) and `browser_read` (headless Chrome), plus
-`set_coverage` (what the topic must cover, and how well it is covered) and
-`save_page` (publish a page it has read; unread URLs are rejected). Its skills in
-`backend/app/skills/research/` (`plan`, `select`, `synthesize`, `evaluate`) are read on
-demand with `read_file`; the `task` subagent is disabled. The course length
-(hours per week × weeks) sets how much the plan must cover.
+Standalone research uses a **Researcher** Deep Agent with `browser_search`,
+`browser_read`, `set_coverage` and `save_page`. Research metadata has no content
+minimums. Saving an unread page gives an informational note rather than rejecting
+it. Its skills live in `backend/app/skills/research/`.
 
 `POST /research-runs/{id}/courses` builds a new course version from a completed
 research run; every version is kept (`GET /research-runs/{id}/courses`). Poll
-`GET /courses/{id}` for the chapters, sections and sources as they are written.
-The first build fetches the full text of the run's saved pages once into
-`source_pages`, so every version cites the same text. The **CourseBuilder** Deep
-Agent works through the course MCP server: `list_sources`, `read_source` and
-`search_sources` return numbered passages (`s2.p7`), `set_outline` sets chapters
-and sections, `write_section` writes one section, and `check_course` lists what is
-left. Every `fact` sentence should cite a passage with a quote that appears in it
-verbatim; `explanation` sentences need no citation. Nothing is rejected: a missing
-citation, a quote not found in its passage, or a number missing from a sentence's
-quotes is saved with a warning that the learner sees highlighted.
-Its skills are in `backend/app/skills/course/` (`outline`, `write`, `review`).
+`GET /courses/{id}` for chapters, sections, sources and current agent activity.
+
+**CourseBuilder** owns the outline and delegates through Deep Agents' native
+`task` tool to two named specialists:
+
+- **Researcher** receives focused questions, searches and reads sources, and uses
+  `save_page` to add captured source text to the course library.
+- **Writer** receives chapter or section briefs and source IDs, reads evidence,
+  and saves sections through `write_section`. `read_section` loads saved content
+  for revisions. Writer returns missing research questions to CourseBuilder.
+
+CourseBuilder can request more research and then send Writer a revision brief.
+The source library is refreshed on every read, so newly saved evidence is
+available during the same build. Initial research text is reused; each new
+course version gets its own source snapshots under its course run ID in
+`source_pages`. Existing courses still read their original research snapshots,
+so no database migration is needed.
+
+Agent skills live in `backend/app/skills/course/`, `research/` and `writer/`.
+Content length, sentence kind and citations are flexible. Citation quotes are
+optional; no automatic quote/number grading or mandatory warning-fixing pass
+runs. `check_course` reports progress without rejecting content. Actual execution
+errors still mark the run failed and preserve sections already saved.
 
 LiteLLM is the mandatory model gateway: changing the `agent-model` mapping in
 `infra/litellm/config.yaml` swaps the model without changing agent code. Durable
@@ -153,4 +162,4 @@ backend/app/
 ## Next product milestones
 
 1. **Phase 0 — curated coverage-based search:** one research agent with `search` and `read` tools builds the coverage checklist and its pages, and results appear as they arrive.
-2. Course generation on top of the research, once a stronger model is available.
+2. Course generation: CourseBuilder coordinates focused research and section writing, with iterative revisions.

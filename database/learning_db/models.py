@@ -105,11 +105,12 @@ class AgentTraceEvent(Base):
 
 
 class SourcePage(Base):
-    """The full text of a researched page, fetched once so every course version cites the same text."""
+    """A source snapshot owned by a research or course run; existing snapshots stay unchanged."""
 
     __tablename__ = "source_pages"
     __table_args__ = (UniqueConstraint("research_run_id", "position"),)
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid4()))
+    # The historical column name also holds course run IDs for version-specific sources.
     research_run_id: Mapped[str] = mapped_column(ForeignKey("agent_runs.id"), index=True)
     position: Mapped[int] = mapped_column(Integer)
     url: Mapped[str] = mapped_column(Text)

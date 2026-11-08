@@ -1,11 +1,11 @@
 export type User = { id: string; email: string; role: "learner" | "admin" };
 export type TopicIntent = { topic: string; level: "beginner" | "intermediate" | "advanced"; hoursPerWeek: number; weeks: number };
 export type CoverageItem = { id: string; question: string; status: "missing" | "partial" | "covered" };
-export type SavedPage = { url: string; title: string; kind: "documentation" | "paper" | "book" | "lecture" | "slides" | "article" | "repository"; why: string; key_points: string[]; covers: string[] };
+export type SavedPage = { url: string; title: string; kind: string; why: string; key_points: string[]; covers: string[] };
 export type ResearchRun = { id: string; topic: string; status: "running" | "completed" | "failed"; error?: string | null; activity?: string | null; coverage: CoverageItem[]; pages: SavedPage[] };
 export type ResearchHistoryItem = { id: string; topic: string; status: ResearchRun["status"]; created_at: string };
 export type ResearchActivity = { run_id: string; sessions: Array<{ id: string; agent_name: string; status: string; output: unknown; activity: Array<{ tool: string; input: Record<string, unknown>; output: Record<string, unknown> }> }> };
-export type Sentence = { text: string; kind: "fact" | "explanation"; cites: Array<{ passage: string; quote: string }>; warning: string | null };
+export type Sentence = { text: string; kind: string; cites: Array<{ passage: string; quote: string }>; warning: string | null };
 export type Chapter = { id: string; title: string; sections: Array<{ id: string; title: string; covers: string[] }> };
 export type CourseVersion = { id: string; version: number; status: ResearchRun["status"]; created_at: string };
 export type Course = CourseVersion & { research_run_id: string; topic: string; error: string | null; activity: string | null; gaps: string[]; chapters: Chapter[]; sections: Record<string, Sentence[][]>; sources: Array<{ id: string; url: string; title: string }> };

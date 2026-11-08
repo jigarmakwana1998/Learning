@@ -11,7 +11,10 @@ from typing import Any
 from uuid import UUID
 
 from deepagents import (
-    GeneralPurposeSubagentProfile, HarnessProfile, create_deep_agent, register_harness_profile,
+    GeneralPurposeSubagentProfile,
+    HarnessProfile,
+    create_deep_agent,
+    register_harness_profile,
 )
 from deepagents.backends import CompositeBackend, FilesystemBackend, StateBackend
 from deepagents.middleware.filesystem import FilesystemMiddleware
@@ -29,7 +32,7 @@ from app.core.config import Settings, get_settings
 
 logger = logging.getLogger(__name__)
 
-# The model gets our tools, read_file (to open a skill) and compact_conversation — no task subagent.
+# Only explicitly configured specialists are available for delegation.
 register_harness_profile(
     "litellm", HarnessProfile(general_purpose_subagent=GeneralPurposeSubagentProfile(enabled=False))
 )
@@ -57,6 +60,8 @@ class AgentEventCollector(AsyncCallbackHandler):
         self.started: dict[UUID, tuple[str, float, dict[str, Any]]] = {}
         self.tool_events: list[ToolInvocationEvent] = []
         self.visited_urls: set[str] = set()
+        self.read_pages: dict[str, dict[str, Any]] = {}
+        self.agents: dict[UUID, str] = {}
         self.activity: str | None = None
 
     async def on_tool_start(
@@ -66,12 +71,15 @@ class AgentEventCollector(AsyncCallbackHandler):
         *,
         run_id: UUID,
         inputs: dict[str, Any] | None = None,
+        metadata: dict[str, Any] | None = None,
         **_: Any,
     ) -> None:
         name = str((serialized or {}).get("name") or "tool")
         payload = self._safe_input(inputs or {"input": input_str})
         self.started[run_id] = (name, perf_counter(), payload)
-        self.activity = f"{name} {json.dumps(payload, default=str)[:200]}"
+        agent = str((metadata or {}).get("lc_agent_name") or (metadata or {}).get("agent_role") or "")
+        self.agents[run_id] = agent
+        self.activity = f"{agent + ': ' if agent else ''}{name} {json.dumps(payload, default=str)[:200]}"
         logger.info("tool.start %s input=%.300s", name, json.dumps(payload, default=str))
 
     async def on_tool_end(self, output: Any, *, run_id: UUID, **_: Any) -> None:
@@ -79,22 +87,32 @@ class AgentEventCollector(AsyncCallbackHandler):
         result = self._unwrap_tool_output(self._json_value(output))
         duration_ms = int((perf_counter() - started) * 1000)
         metadata = self._safe_metadata(name, payload, result)
+        agent = self.agents.pop(run_id, "")
+        if agent:
+            metadata["agent"] = agent
         self._collect_urls(name, result)
         self.tool_events.append(ToolInvocationEvent(name, "success", metadata, duration_ms=duration_ms))
         if name in {"browser_search", "browser_read"} and isinstance(result, dict):
-            await self._emit({"type": "research.browser", "name": name, "input": payload, "output": result})
+            await self._emit({
+                "type": "research.browser", "name": name, "agent": agent, "input": payload, "output": result,
+            })
         logger.info("tool.end %s %dms output=%.300s", name, duration_ms, json.dumps(result, default=str))
 
     async def on_tool_error(self, error: BaseException, *, run_id: UUID, **_: Any) -> None:
         name, started, payload = self.started.pop(run_id, ("tool", perf_counter(), {}))
         duration_ms = int((perf_counter() - started) * 1000)
         message = str(error)[:2000]
+        agent = self.agents.pop(run_id, "")
         logger.warning("tool.error %s %dms error=%.300s", name, duration_ms, message)
         self.tool_events.append(
-            ToolInvocationEvent(name, "failed", {"input": payload}, error=message, duration_ms=duration_ms)
+            ToolInvocationEvent(
+                name, "failed", {"input": payload, "agent": agent}, error=message, duration_ms=duration_ms,
+            )
         )
 
-    async def on_chat_model_start(self, serialized: dict[str, Any] | None, messages: list[list[Any]], *, run_id: UUID, **_: Any) -> None:
+    async def on_chat_model_start(
+        self, serialized: dict[str, Any] | None, messages: list[list[Any]], *, run_id: UUID, **_: Any,
+    ) -> None:
         self.started[run_id] = ("model", perf_counter(), {})
         logger.info("model.start messages=%d", sum(len(batch) for batch in messages))
 
@@ -143,6 +161,7 @@ class AgentEventCollector(AsyncCallbackHandler):
                 for url in (page.get("url"), page.get("requested_url")):
                     if isinstance(url, str):
                         self.visited_urls.add(url)
+                        self.read_pages[url] = page
 
     @staticmethod
     def _safe_input(payload: dict[str, Any]) -> dict[str, Any]:
@@ -217,6 +236,7 @@ class DeepAgentRuntime:
         system_prompt: str,
         skills_dir: Path,
         tools: list[BaseTool] | None = None,
+        subagents: list[dict[str, Any]] | None = None,
         collector: AgentEventCollector | None = None,
         on_event: Callable[[dict[str, Any]], Awaitable[None]] | None = None,
     ) -> DeepAgentExecution:
@@ -229,22 +249,33 @@ class DeepAgentRuntime:
         }
         model = self._model(gateway_api_key, metadata)
         # The agent's own skills are read from disk; everything else (e.g. evicted large tool results) stays in state.
-        backend = CompositeBackend(
-            default=StateBackend(),
-            routes={"/skills/": FilesystemBackend(root_dir=skills_dir, virtual_mode=True)},
-        )
-        summarization = SummarizationMiddleware(
-            model,
-            backend=backend,
-            trigger=("tokens", self.settings.agent_compaction_tokens),
-            keep=("messages", self.settings.agent_compaction_keep_messages),
-            trim_tokens_to_summarize=self.settings.agent_summary_input_tokens,
-        )
-        middleware = [
-            FilesystemMiddleware(backend=backend, tools=["read_file"]),
-            summarization,
-            SummarizationToolMiddleware(summarization),
-        ]
+        routes = {"/skills/": FilesystemBackend(root_dir=skills_dir, virtual_mode=True)}
+        specialists = []
+        for spec in subagents or []:
+            child = dict(spec)
+            path = f"/skills/{child['name']}/"
+            routes[path] = FilesystemBackend(root_dir=child.pop("skills_dir"), virtual_mode=True)
+            child["skills"] = [path]
+            child["model"] = self._model(gateway_api_key, {**metadata, "agent_role": child["name"]})
+            specialists.append(child)
+        backend = CompositeBackend(default=StateBackend(), routes=routes)
+
+        def middleware(agent_model):
+            summarization = SummarizationMiddleware(
+                agent_model,
+                backend=backend,
+                trigger=("tokens", self.settings.agent_compaction_tokens),
+                keep=("messages", self.settings.agent_compaction_keep_messages),
+                trim_tokens_to_summarize=self.settings.agent_summary_input_tokens,
+            )
+            return [
+                FilesystemMiddleware(backend=backend, tools=["read_file"]),
+                summarization,
+                SummarizationToolMiddleware(summarization),
+            ]
+
+        for child in specialists:
+            child["middleware"] = middleware(child["model"])
         collector = collector or AgentEventCollector()
         collector.on_event = on_event
 
@@ -253,7 +284,8 @@ class DeepAgentRuntime:
                 model=model,
                 tools=tools or [],
                 system_prompt=system_prompt,
-                middleware=middleware,
+                middleware=middleware(model),
+                subagents=specialists,
                 backend=backend,
                 skills=["/skills/"],
                 checkpointer=checkpointer,

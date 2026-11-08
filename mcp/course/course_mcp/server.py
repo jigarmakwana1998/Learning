@@ -6,17 +6,17 @@ only reach the sources of the research run it is building from.
 
 from __future__ import annotations
 
+import asyncio
 import os
 import re
 from dataclasses import dataclass
 
-from mcp.server import MCPServer
-from sqlalchemy import select
-
-from learning_db.models import AgentRun, Course, LearningRequest, SourcePage
+from learning_db.models import AgentRun, Course, LearningRequest
 from learning_db.session import SessionLocal
+from learning_db.sources import course_sources
+from mcp.server import MCPServer
 
-from .course import Chapter, Sentence, check, paragraphs, passages, review
+from .course import Chapter, Sentence, WrittenSentence, check, paragraphs, passages
 
 READ_CHARACTERS = 6000
 
@@ -31,29 +31,24 @@ class Library:
     passages: dict[str, str]
 
 
-_library: Library | None = None
+_writes = asyncio.Lock()
 
 
 async def library() -> Library:
-    """The run's goal, coverage and sources; fixed for the life of this process."""
-    global _library
-    if _library is None:
-        async with SessionLocal() as db:
-            course = await db.get(Course, os.environ["COURSE_ID"])
-            research = await db.get(AgentRun, course.research_run_id)
-            request = await db.get(LearningRequest, research.learning_request_id)
-            pages = (
-                await db.scalars(
-                    select(SourcePage).where(SourcePage.research_run_id == research.id).order_by(SourcePage.position)
-                )
-            ).all()
-        saved = {page["url"]: page for page in research.result["pages"]}
-        sources, texts = [], {}
-        for page in pages:
-            lines = passages(page.text)
-            texts.update({f"s{page.position}.p{n}": line for n, line in enumerate(lines, 1)})
-            info = saved.get(page.url, {})
-            sources.append({
+    """Read the current library so sources added during delegation are immediately visible."""
+    async with SessionLocal() as db:
+        course = await db.get(Course, os.environ["COURSE_ID"])
+        research = await db.get(AgentRun, course.research_run_id)
+        request = await db.get(LearningRequest, research.learning_request_id)
+        pages = await course_sources(db, course)
+    saved = {page["url"]: page for page in (research.result or {}).get("pages", [])}
+    sources, texts = [], {}
+    for page in pages:
+        lines = passages(page.text)
+        texts.update({f"s{page.position}.p{n}": line for n, line in enumerate(lines, 1)})
+        info = saved.get(page.url, {})
+        sources.append(
+            {
                 "id": f"s{page.position}",
                 "title": page.title,
                 "url": page.url,
@@ -61,14 +56,14 @@ async def library() -> Library:
                 "why": info.get("why"),
                 "covers": info.get("covers", []),
                 "passages": len(lines),
-            })
-        _library = Library(
-            goal={"topic": request.topic, "level": request.level, "total_hours": request.hours_per_week * request.weeks},
-            coverage=research.result["coverage"],
-            sources=sources,
-            passages=texts,
+            }
         )
-    return _library
+    return Library(
+        goal={"topic": request.topic, "level": request.level, "total_hours": request.hours_per_week * request.weeks},
+        coverage=(research.result or {}).get("coverage", []),
+        sources=sources,
+        passages=texts,
+    )
 
 
 @mcp.tool()
@@ -115,7 +110,7 @@ async def search_sources(query: str, limit: int = 8) -> dict:
 @mcp.tool()
 async def set_outline(chapters: list[Chapter]) -> str:
     """Set the course's chapters and sections. Replaces the outline; sections already written are kept by id."""
-    async with SessionLocal() as db:
+    async with _writes, SessionLocal() as db:
         course = await db.get(Course, os.environ["COURSE_ID"])
         course.chapters = [chapter.model_dump() for chapter in chapters]
         await db.commit()
@@ -123,11 +118,18 @@ async def set_outline(chapters: list[Chapter]) -> str:
 
 
 @mcp.tool()
+async def read_section(section_id: str) -> dict:
+    """Read a saved section and its outline before writing a revision."""
+    async with SessionLocal() as db:
+        course = await db.get(Course, os.environ["COURSE_ID"])
+    return {"chapters": course.chapters, "section_id": section_id, "paragraphs": course.sections.get(section_id, [])}
+
+
+@mcp.tool()
 async def write_section(section_id: str, sentences: list[Sentence]) -> str:
     """Write or replace one outlined section as a flat list of sentences, each with its paragraph number."""
-    lib = await library()
-    written = review(paragraphs(sentences), lib.passages.get)
-    async with SessionLocal() as db:
+    written = [[WrittenSentence(**s.model_dump()) for s in p] for p in paragraphs(sentences)]
+    async with _writes, SessionLocal() as db:
         course = await db.get(Course, os.environ["COURSE_ID"])
         outlined = {section.id for chapter in course.chapters for section in Chapter(**chapter).sections}
         course.sections = {**course.sections, section_id: [[s.model_dump() for s in p] for p in written]}
@@ -135,14 +137,12 @@ async def write_section(section_id: str, sentences: list[Sentence]) -> str:
     reply = f"Wrote {section_id}: {sum(len(p) for p in written)} sentences."
     if section_id not in outlined:
         reply += f" {section_id} is not in the outline, so the learner will not see it; use an outline id."
-    if warnings := [f"paragraph {i} sentence {j}: {s.warning}" for i, p in enumerate(written, 1) for j, s in enumerate(p, 1) if s.warning]:
-        reply += " Warnings, highlighted for the learner until you fix them:\n- " + "\n- ".join(warnings)
     return reply
 
 
 @mcp.tool()
 async def check_course() -> dict:
-    """Sections not yet written, coverage items no written section teaches, and open number warnings."""
+    """Descriptive progress: sections still unwritten, coverage gaps, and any legacy warnings."""
     lib = await library()
     async with SessionLocal() as db:
         course = await db.get(Course, os.environ["COURSE_ID"])

@@ -25,6 +25,7 @@ function openPublicUrl(url: string) {
 
 /** Opens the source page scrolled to the quoted text (a URL text fragment). */
 function quoteLink(url: string, quote: string) {
+  if (!quote) return url;
   return `${url.split("#")[0]}#:~:text=${encodeURIComponent(quote).replace(/-/g, "%2D")}`;
 }
 
@@ -177,18 +178,21 @@ function ActivityHistory({ runId, running, active }: { runId: string; running: b
 
 function CoverageList({ run }: { run: ResearchRun }) {
   const styles = useStyles();
+  const unassigned = run.pages.filter((page) => !run.coverage.some((item) => page.covers.includes(item.id)));
+  const groups: Array<{ id: string; question: string; status?: string; pages: ResearchRun["pages"] }> = run.coverage.map((item) => ({ ...item, pages: run.pages.filter((page) => page.covers.includes(item.id)) }));
+  if (unassigned.length) groups.push({ id: "additional-sources", question: "Additional sources", pages: unassigned });
   return (
     <View style={styles.sectionStack}>
-      {run.coverage.map((item) => {
-        const pages = run.pages.filter((page) => page.covers.includes(item.id));
+      {groups.map((item) => {
+        const pages = item.pages;
         return (
           <View key={item.id} style={styles.module}>
-            <Text style={styles.kicker}>{item.status.toUpperCase()}</Text>
+            {item.status && <Text style={styles.kicker}>{item.status.toUpperCase()}</Text>}
             <Text style={styles.sectionTitle}>{item.question}</Text>
             {pages.length ? pages.map((page) => (
               <View key={page.url} style={styles.lesson}>
                 <Pressable accessibilityRole="link" onPress={() => openPublicUrl(page.url)} style={({ pressed }) => [styles.sourceLink, pressed && styles.pressed]}>
-                  <Text style={styles.sourceLinkText}>{page.title}</Text>
+                  <Text style={styles.sourceLinkText}>{page.title || page.url}</Text>
                   <Text style={styles.urlText} numberOfLines={2}>{page.url}</Text>
                 </Pressable>
                 <Text style={styles.bodyMuted}>{page.why}</Text>

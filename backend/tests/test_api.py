@@ -93,3 +93,40 @@ def test_old_research_activity_is_available_only_to_its_owner():
         other = auth(client, "other-history@example.com")
         assert client.get(f"/research-runs/{run_id}/activity", headers=other).status_code == 404
         assert client.get(f"/courses/{course_id}", headers=other).status_code == 404
+
+
+def test_interrupted_course_keeps_its_version_specific_sources():
+    from uuid import uuid4
+
+    from sqlalchemy import select
+    from learning_db.models import AgentRun, Course, LearningRequest, SourcePage, User
+    from learning_db.session import SessionLocal
+
+    email = f"restart-{uuid4().hex}@example.com"
+
+    async def seed():
+        async with SessionLocal() as db:
+            user = await db.scalar(select(User).where(User.email == email))
+            request = LearningRequest(user_id=user.id, topic="Functions", level="beginner", hours_per_week=1, weeks=1)
+            db.add(request)
+            await db.flush()
+            research = AgentRun(learning_request_id=request.id, harness="deep-agents", status="completed", result={})
+            db.add(research)
+            await db.flush()
+            run = AgentRun(learning_request_id=request.id, harness="deep-agents", result={"source_snapshot": True})
+            db.add(run)
+            await db.flush()
+            db.add(Course(id=run.id, research_run_id=research.id, version=1, chapters=[], sections={}))
+            db.add(SourcePage(research_run_id=run.id, position=1, url="https://example.com/new",
+                              title="New evidence", text="Version-specific evidence"))
+            await db.commit()
+            return run.id
+
+    with TestClient(app) as client:
+        owner = auth(client, email)
+        client.get("/auth/me", headers=owner)
+        course_id = client.portal.call(seed)
+    with TestClient(app) as client:
+        course = client.get(f"/courses/{course_id}", headers=owner).json()
+    assert course["status"] == "failed" and "restart" in course["error"]
+    assert course["sources"] == [{"id": "s1", "url": "https://example.com/new", "title": "New evidence"}]

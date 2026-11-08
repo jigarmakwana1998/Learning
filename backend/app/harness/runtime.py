@@ -1,17 +1,17 @@
 import json
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from time import perf_counter
 
+from learning_db.models import AgentSessionRecord, TranscriptEntryRecord
+from learning_db.session import SessionLocal
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.security import encrypt
-from app.harness.gateway import LiteLLMGateway
 from app.harness.deep_agents import DeepAgentRuntime, ToolInvocationEvent
-from app.tracing import record_tool_invocation, record_trace_event
-from learning_db.models import AgentSessionRecord, TranscriptEntryRecord
-from learning_db.session import SessionLocal
+from app.harness.gateway import LiteLLMGateway
 from app.schemas.learning import AgentHarness as AgentHarnessName
+from app.tracing import record_tool_invocation, record_trace_event
 
 
 class AgentHarness:
@@ -99,6 +99,7 @@ class AgentHarness:
                             evidence_db, run_id=session.agent_run_id, session_id=session_id,
                             event_type="tool", name=event["name"], input_payload=event["input"],
                             output_payload=event["output"],
+                            metadata={"agent": event.get("agent")},
                         )
                         await evidence_db.commit()
                     return
@@ -126,6 +127,8 @@ class AgentHarness:
                     output_payload=self._event_payload(payload, "output"),
                     metadata={"harness": self.harness, "raw_event": event},
                 )
+                # Release the write lock before a delegated MCP tool writes its result.
+                await self.db.commit()
 
             # Release SQLite's write lock: MCP servers write to the database while the agent runs.
             await self.db.commit()
@@ -210,13 +213,13 @@ class AgentHarness:
                         metadata={"harness": self.harness},
                         error=str(telemetry_error)[:2000],
                     )
-            session.completed_at = datetime.now(timezone.utc)
+            session.completed_at = datetime.now(UTC)
             session.duration_ms = int((perf_counter() - started) * 1000)
             await self.db.flush()
 
     async def close(self, session_id: str) -> AgentSessionRecord:
         session = await self.get(session_id)
-        session.status, session.completed_at = "closed", datetime.now(timezone.utc)
+        session.status, session.completed_at = "closed", datetime.now(UTC)
         await self.db.flush()
         return session
 
