@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import {
   ActivityIndicator,
   Alert,
+  AppState,
   Linking,
   Pressable,
   ScrollView,
@@ -12,7 +13,7 @@ import {
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 
-import { buildCourse, Course, CourseVersion, getCourse, getCourseVersions, getMe, getResearchRun, login, logout, register, ResearchRun, Sentence, startResearchRun, User } from "@/lib/api";
+import { buildCourse, Course, CourseVersion, getCourse, getCourseVersions, getMe, getResearchRun, getResearchRuns, login, logout, register, ResearchHistoryItem, ResearchRun, Sentence, startResearchRun, User } from "@/lib/api";
 
 function openPublicUrl(url: string) {
   if (!url.startsWith("https://")) return;
@@ -32,15 +33,20 @@ export default function HomeScreen() {
   const [user, setUser] = useState<User | null>(null);
   const [loading, setLoading] = useState(false);
   const [run, setRun] = useState<ResearchRun | null>(null);
+  const [history, setHistory] = useState<ResearchHistoryItem[]>([]);
+  const [connectionError, setConnectionError] = useState(false);
 
   useEffect(() => { getMe().then(setUser).catch(() => undefined); }, []);
 
-  // Poll while the agent works so coverage and pages appear as they arrive.
+  useEffect(() => { if (user) getResearchRuns().then(setHistory).catch(() => setConnectionError(true)); }, [user]);
+
   useEffect(() => {
     if (run?.status !== "running") return;
-    const timer = setTimeout(() => { getResearchRun(run.id).then(setRun).catch(() => undefined); }, 2000);
-    return () => clearTimeout(timer);
-  }, [run]);
+    const refresh = () => getResearchRun(run.id).then((next) => { setRun(next); setConnectionError(false); if (next.status !== "running") getResearchRuns().then(setHistory).catch(() => undefined); }).catch(() => setConnectionError(true));
+    const timer = setInterval(refresh, 2000);
+    const subscription = AppState.addEventListener("change", (state) => { if (state === "active") refresh(); });
+    return () => { clearInterval(timer); subscription.remove(); };
+  }, [run?.id, run?.status]);
 
   async function signIn(mode: "login" | "register") {
     setLoading(true);
@@ -61,6 +67,7 @@ export default function HomeScreen() {
     setLoading(true);
     try {
       setRun(await getResearchRun((await startResearchRun(topic.trim(), Number(hours) || 5)).id));
+      setHistory(await getResearchRuns());
     } catch (error) {
       Alert.alert("Could not research this topic", error instanceof Error ? error.message : "Please try again.");
     } finally {
@@ -90,7 +97,7 @@ export default function HomeScreen() {
           <>
             <View style={styles.userRow}>
               <Text style={styles.signedIn} numberOfLines={1}>Signed in as {user.email}</Text>
-              <Pressable accessibilityRole="button" onPress={() => logout().then(() => setUser(null))} style={styles.textButton}><Text style={styles.link}>Sign out</Text></Pressable>
+              <Pressable accessibilityRole="button" onPress={() => logout().then(() => { setUser(null); setRun(null); setHistory([]); setConnectionError(false); })} style={styles.textButton}><Text style={styles.link}>Sign out</Text></Pressable>
             </View>
             <Text style={styles.subtitle}>Name the subject. The research agent maps what it involves and finds pages that teach each part, reading every page first.</Text>
             <TextInput value={topic} onChangeText={setTopic} placeholder="e.g. Attention layers in large language models" style={styles.input} />
@@ -100,6 +107,11 @@ export default function HomeScreen() {
               {loading ? <ActivityIndicator color="#fff" /> : <Text style={styles.primaryButtonText}>Research this topic</Text>}
             </Pressable>
 
+            <View style={styles.card}><Text style={styles.cardTitle}>Your research</Text>
+              {history.length ? history.map((item) => <Pressable key={item.id} accessibilityRole="button" onPress={() => getResearchRun(item.id).then(setRun).catch(() => setConnectionError(true))} style={styles.textButton}><Text style={styles.link}>{item.topic} · {item.status}</Text></Pressable>) : <Text style={styles.bodyMuted}>Your research sessions will appear here.</Text>}
+              {connectionError && <Text accessibilityRole="alert" style={styles.error}>Could not update research. Check your connection and try again.</Text>}
+            </View>
+
             {run && (
               <View style={styles.courseShell}>
                 <Text style={styles.cardTitle}>{run.topic}</Text>
@@ -108,7 +120,7 @@ export default function HomeScreen() {
                 <CoverageList run={run} />
               </View>
             )}
-            {run?.status === "completed" && <CourseSection researchRunId={run.id} />}
+            {run?.status === "completed" && <CourseSection key={run.id} researchRunId={run.id} />}
           </>
         )}
       </ScrollView>
@@ -147,16 +159,18 @@ function CourseSection({ researchRunId }: { researchRunId: string }) {
   const [course, setCourse] = useState<Course | null>(null);
   const [starting, setStarting] = useState(false);
 
-  const show = (id: string) => getCourse(id).then(setCourse).catch(() => undefined);
+  const show = (id: string) => getCourse(id).then(setCourse);
   const refresh = () => getCourseVersions(researchRunId).then((list) => { setVersions(list); return list; });
   useEffect(() => { refresh().then((list) => list[0] && show(list[0].id)).catch(() => undefined); }, [researchRunId]);
 
   // Poll while the agent writes so sections appear as they arrive.
   useEffect(() => {
     if (course?.status !== "running") { refresh().catch(() => undefined); return; }
-    const timer = setTimeout(() => show(course.id), 2000);
-    return () => clearTimeout(timer);
-  }, [course]);
+    const refreshCourse = () => show(course.id).catch(() => undefined);
+    const timer = setInterval(refreshCourse, 2000);
+    const subscription = AppState.addEventListener("change", (state) => { if (state === "active") refreshCourse(); });
+    return () => { clearInterval(timer); subscription.remove(); };
+  }, [course?.id, course?.status]);
 
   async function start() {
     setStarting(true);
@@ -177,7 +191,7 @@ function CourseSection({ researchRunId }: { researchRunId: string }) {
         {busy ? <ActivityIndicator color="#fff" /> : <Text style={styles.primaryButtonText}>{versions.length ? "Build new version" : "Build course"}</Text>}
       </Pressable>
       {versions.length > 0 && <ScrollView horizontal contentContainerStyle={styles.versionRow}>
-        {versions.map((v) => <Pressable key={v.id} accessibilityRole="button" accessibilityState={{ selected: v.id === course?.id }} onPress={() => show(v.id)} style={[styles.versionChip, v.id === course?.id && styles.versionChipActive]}>
+        {versions.map((v) => <Pressable key={v.id} accessibilityRole="button" accessibilityState={{ selected: v.id === course?.id }} onPress={() => show(v.id).catch(() => Alert.alert("Could not load the course"))} style={[styles.versionChip, v.id === course?.id && styles.versionChipActive]}>
           <Text style={v.id === course?.id ? styles.versionTextActive : styles.versionText}>v{v.version} · {v.status}</Text>
         </Pressable>)}
       </ScrollView>}
