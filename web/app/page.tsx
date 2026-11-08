@@ -8,6 +8,7 @@ import { AuthPanel } from "@/components/auth-panel";
 import { CoursePanel } from "@/components/course-panel";
 import { IntakeForm } from "@/components/intake-form";
 import { ResearchResults } from "@/components/research-results";
+import { ResearchActivity } from "@/components/research-activity";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { getMe, getResearchRun, getResearchRuns, startResearchRun, type TopicIntent } from "@/lib/api";
@@ -40,6 +41,7 @@ export default function Home() {
       {run.isError && <p role="alert">Could not update this session. <button className="underline" onClick={() => run.refetch()}>Try again</button></p>}
       {run.data?.status === "failed" && <p role="alert" className="rounded-xl border border-red-200 bg-red-50 p-4 text-red-800 dark:border-red-900 dark:bg-red-950 dark:text-red-200">{run.data.error ?? "Research failed. Please try again."}</p>}
       {run.data && <ResearchResults run={run.data} />}
+      {run.data && <ResearchActivity runId={run.data.id} token={token} running={run.data.status === "running"} />}
       {run.data?.status === "completed" && <CoursePanel key={run.data.id} researchRunId={run.data.id} token={token} />}
     </div>
   </AppShell>;
