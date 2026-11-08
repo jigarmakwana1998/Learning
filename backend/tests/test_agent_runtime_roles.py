@@ -36,7 +36,10 @@ def test_deep_agent_routes_model_through_litellm_and_maps_medium_reasoning():
 
 @pytest.mark.asyncio
 async def test_tool_collector_redacts_browser_content_and_keeps_visit_evidence():
-    collector = AgentEventCollector()
+    saved = []
+    async def capture(event):
+        saved.append(event)
+    collector = AgentEventCollector(on_event=capture)
     run_id = uuid4()
     await collector.on_tool_start(
         {"name": "browser_read"},
@@ -68,6 +71,21 @@ async def test_tool_collector_redacts_browser_content_and_keeps_visit_evidence()
     ]
     assert "UNTRUSTED_PAGE_BODY" not in json.dumps(event.metadata)
     assert collector.visited_urls == {"https://example.com/paper"}
+    assert saved[0]["output"]["pages"][0]["content"] == "UNTRUSTED_PAGE_BODY"
+    assert saved[0]["input"] == {"urls": ["https://example.com/paper"]}
+
+
+@pytest.mark.asyncio
+async def test_collector_saves_search_queries_and_results():
+    saved = []
+    async def capture(event):
+        saved.append(event)
+    collector = AgentEventCollector(on_event=capture)
+    run_id = uuid4()
+    await collector.on_tool_start({"name": "browser_search"}, "", run_id=run_id, inputs={"query": "python"})
+    await collector.on_tool_end({"results": [{"url": "https://example.com", "title": "Example"}]}, run_id=run_id)
+    assert saved[0]["input"]["query"] == "python"
+    assert saved[0]["output"]["results"][0]["url"] == "https://example.com"
 
 
 @pytest.mark.asyncio
