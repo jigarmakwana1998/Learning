@@ -21,7 +21,7 @@ export function IntakeForm({ onSubmit, pending }: { onSubmit: (intent: TopicInte
         <div className="grid gap-1.5"><Label htmlFor="hours">Hours each week</Label><Input id="hours" type="number" min={1} max={40} value={intent.hoursPerWeek} onChange={(event) => update("hoursPerWeek", Number(event.target.value))} required /></div>
         <div className="grid gap-1.5"><Label htmlFor="weeks">Time available, in weeks</Label><Input id="weeks" type="number" min={1} max={24} value={intent.weeks} onChange={(event) => update("weeks", Number(event.target.value))} required /></div>
       </div>
-      <div><Button type="submit" disabled={pending} className="w-full gap-2 sm:w-auto">{pending ? <><LoaderCircle className="animate-spin" size={18} aria-hidden="true" /> Researching and writing...</> : <><WandSparkles size={18} aria-hidden="true" /> Research topic</>}</Button>{pending && <p className="mt-3 text-sm text-muted-foreground" role="status">The agent is searching, reading, filtering, and writing your lessons. This can take a few minutes; please keep this tab open.</p>}</div>
+      <div><Button type="submit" disabled={pending} className="w-full gap-2 sm:w-auto">{pending ? <><LoaderCircle className="animate-spin" size={18} aria-hidden="true" /> Starting research...</> : <><WandSparkles size={18} aria-hidden="true" /> Research topic</>}</Button></div>
     </form>
   </Card>;
 }
