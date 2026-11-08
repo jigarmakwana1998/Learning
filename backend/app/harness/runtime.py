@@ -10,6 +10,7 @@ from app.harness.gateway import LiteLLMGateway
 from app.harness.deep_agents import DeepAgentRuntime, ToolInvocationEvent
 from app.tracing import record_tool_invocation, record_trace_event
 from learning_db.models import AgentSessionRecord, TranscriptEntryRecord
+from learning_db.session import SessionLocal
 from app.schemas.learning import AgentHarness as AgentHarnessName
 
 
@@ -92,6 +93,15 @@ class AgentHarness:
             )
 
             async def capture_harness_event(event: dict) -> None:
+                if event.get("type") == "research.browser":
+                    async with SessionLocal() as evidence_db:
+                        await record_trace_event(
+                            evidence_db, run_id=session.agent_run_id, session_id=session_id,
+                            event_type="tool", name=event["name"], input_payload=event["input"],
+                            output_payload=event["output"],
+                        )
+                        await evidence_db.commit()
+                    return
                 payload = next(
                     (
                         candidate
