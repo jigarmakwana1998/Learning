@@ -81,6 +81,8 @@ class AgentEventCollector(AsyncCallbackHandler):
         metadata = self._safe_metadata(name, payload, result)
         self._collect_urls(name, result)
         self.tool_events.append(ToolInvocationEvent(name, "success", metadata, duration_ms=duration_ms))
+        if name in {"browser_search", "browser_read"} and isinstance(result, dict):
+            await self._emit({"type": "research.browser", "name": name, "input": payload, "output": result})
         logger.info("tool.end %s %dms output=%.300s", name, duration_ms, json.dumps(result, default=str))
 
     async def on_tool_error(self, error: BaseException, *, run_id: UUID, **_: Any) -> None:
