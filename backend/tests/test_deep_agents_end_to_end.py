@@ -150,9 +150,11 @@ def test_researcher_saves_only_read_pages_and_publishes_them_live(tmp_path, monk
         # TestClient runs background tasks before returning the response.
         run = client.get(f"/research-runs/{started.json()['id']}", headers=learner).json()
         trace = client.get(f"/research-runs/{run['id']}/trace", headers=learner).json()
+        activity = client.get(f"/research-runs/{run['id']}/activity", headers=learner).json()
         other = client.post("/auth/register", json={"email": f"o-{uuid4().hex}@example.com", "password": "LearnerPass123!"})
         other_headers = {"Authorization": f"Bearer {other.json()['access_token']}"}
         assert client.get(f"/research-runs/{run['id']}", headers=other_headers).status_code == 404
+        assert client.get(f"/research-runs/{run['id']}/activity", headers=other_headers).status_code == 404
 
     assert not script, "the agent stopped before finishing the script"
     assert offered[0] == ["browser_read", "browser_search", "compact_conversation", "read_file", "save_page", "set_coverage"]
@@ -164,6 +166,9 @@ def test_researcher_saves_only_read_pages_and_publishes_them_live(tmp_path, monk
     assert [page["url"] for page in run["pages"]] == [READ_URL]
     session = next(item for item in trace["sessions"] if item["agent_name"] == "Researcher")
     assert {tool["tool_name"] for tool in session["tool_invocations"]} >= {"browser_search", "browser_read", "save_page"}
+    browser_events = activity["sessions"][0]["activity"]
+    assert any(event["tool"] == "browser_search" and event["input"]["query"] for event in browser_events)
+    assert any(event["tool"] == "browser_read" and event["output"]["pages"][0]["content"] for event in browser_events)
 
 
 def test_browser_mcp_server_exposes_only_search_and_read(tmp_path, monkeypatch):

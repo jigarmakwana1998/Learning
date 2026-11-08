@@ -50,3 +50,46 @@ def test_failed_background_run_reports_its_reason(monkeypatch):
         run = client.get(f"/research-runs/{started.json()['id']}", headers=headers).json()
         assert run["status"] == "failed"
         assert run["error"] == "The browser MCP server could not start."
+
+
+def test_old_research_activity_is_available_only_to_its_owner():
+    from sqlalchemy import select
+    from learning_db.models import AgentRun, AgentSessionRecord, Course, LearningRequest, McpToolInvocation, SourcePage, User
+    from learning_db.session import SessionLocal
+
+    async def seed():
+        async with SessionLocal() as db:
+            user = await db.scalar(select(User).where(User.email == "history@example.com"))
+            request = LearningRequest(user_id=user.id, topic="Saved topic", level="beginner", hours_per_week=5, weeks=4)
+            db.add(request)
+            await db.flush()
+            run = AgentRun(learning_request_id=request.id, harness="deep-agents", status="completed", result={})
+            db.add(run)
+            await db.flush()
+            session = AgentSessionRecord(agent_run_id=run.id, agent_name="Researcher", harness="deep-agents", status="completed")
+            db.add(session)
+            await db.flush()
+            db.add(McpToolInvocation(session_id=session.id, tool_name="browser_search", status="success", metadata_json={"input": {"query": "old query"}, "results": [{"url": "https://example.com", "title": "Example"}]}))
+            db.add(McpToolInvocation(session_id=session.id, tool_name="browser_read", status="success", metadata_json={"input": {"urls": ["https://example.com"]}, "results": [{"url": "https://example.com", "title": "Example"}]}))
+            db.add(SourcePage(research_run_id=run.id, position=1, url="https://example.com", title="Example", text="Saved page text"))
+            course_run = AgentRun(learning_request_id=request.id, harness="deep-agents", status="completed", result={})
+            db.add(course_run)
+            await db.flush()
+            db.add(Course(id=course_run.id, research_run_id=run.id, version=1, chapters=[], sections={}))
+            await db.commit()
+            return run.id, course_run.id
+
+    with TestClient(app) as client:
+        owner = auth(client, "history@example.com")
+        client.get("/auth/me", headers=owner)
+        run_id, course_id = client.portal.call(seed)
+        activity = client.get(f"/research-runs/{run_id}/activity", headers=owner).json()
+        assert activity["sessions"][0]["activity"][0]["input"]["query"] == "old query"
+        assert activity["sessions"][0]["activity"][0]["output"]["results"][0]["url"] == "https://example.com"
+        assert activity["sessions"][0]["activity"][1]["output"]["results"][0]["content"] == "Saved page text"
+        assert any(item["id"] == run_id for item in client.get("/research-runs", headers=owner).json())
+        assert client.get(f"/research-runs/{run_id}/courses", headers=owner).json()[0]["id"] == course_id
+        assert client.get(f"/courses/{course_id}", headers=owner).json()["sources"][0]["title"] == "Example"
+        other = auth(client, "other-history@example.com")
+        assert client.get(f"/research-runs/{run_id}/activity", headers=other).status_code == 404
+        assert client.get(f"/courses/{course_id}", headers=other).status_code == 404
