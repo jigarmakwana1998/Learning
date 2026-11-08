@@ -309,7 +309,7 @@ function createStyles(dark: boolean) {
   safe: { flex: 1, backgroundColor: dark ? "#171625" : "#f7f7fb" },
   container: { padding: 20, paddingBottom: 48, gap: 12 },
   drawerOverlay: { flex: 1, flexDirection: "row" },
-  drawerBackdrop: { ...StyleSheet.absoluteFillObject, backgroundColor: "rgba(20, 18, 34, 0.45)" },
+  drawerBackdrop: { position: "absolute", top: 0, right: 0, bottom: 0, left: 0, backgroundColor: "rgba(20, 18, 34, 0.45)" },
   drawer: { width: "82%", maxWidth: 320, backgroundColor: dark ? "#242235" : "#fff", padding: 20, gap: 16 },
   drawerList: { gap: 4, paddingBottom: 24 },
   historyButton: { minHeight: 48, justifyContent: "center", borderRadius: 10, backgroundColor: dark ? "#37334f" : "#efedf9", paddingHorizontal: 14 },
